@@ -1,5 +1,7 @@
 # MeshZero
 
+![Social Preview of App](assets/social-preview.png)
+
 A Meshtastic client for the M5Stack CardputerZero with the Cap LoRa-1262.
 
 The Cardputer Zero needed a fully featured meshtastic client, but the only
@@ -9,6 +11,8 @@ daemon supports, and bring the Cardputer up with full Meshtastic support.
 
 My long term goal is to expand the app's abilities into Meshcore and potentially
 other mesh networking technologies.
+
+## A little taste...
 
 ![Chats](screenshots/1-chats.png) ![Nodes](screenshots/3-nodes.png) ![Map](screenshots/5-map.png)
 
