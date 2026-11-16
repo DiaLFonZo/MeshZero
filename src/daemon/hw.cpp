@@ -165,12 +165,42 @@ bool exists(const std::string& path)
 
 }  // namespace
 
+Cap hw_cap_probe(bool patient)
+{
+    if (env_or("MESHZERO_CAP_DETECT", "1") == "0") return Cap::Unknown;
+    // The expander is powered from the 5 V rail, so that has to be on first.
+    const std::string rail = rail_path();
+    bool rail_ok           = true;
+    if (exists(rail)) {
+        std::string current;
+        if (!read_file(rail, current)) {
+            rail_ok = false;
+        } else if (current == "0") {
+            rail_ok = write_file(rail, "1");
+            if (rail_ok) usleep(200000);
+        }
+    }
+    Expander ex;
+    if (!ex.open_bus()) return Cap::Unknown;
+    uint8_t id = 0;
+    for (int attempt = 0; attempt < (patient ? 10 : 2); ++attempt) {
+        if (ex.read_reg(kRegDeviceId, id)) return Cap::Present;
+        usleep(patient ? 50000 : 5000);
+    }
+    return rail_ok ? Cap::Absent : Cap::Unknown;
+}
+
+const char* hw_cap_name(Cap cap)
+{
+    return cap == Cap::Present ? "attached" : cap == Cap::Absent ? "not attached" : "unknown";
+}
+
 bool hw_power(bool on)
 {
     const std::string rail = rail_path();
     if (!on) {
         // Leave the rail alone when switching off: other accessories may share it.
-        antenna_switch(false);
+        if (hw_cap_probe(false) != Cap::Absent) antenna_switch(false);
         return true;
     }
     if (exists(rail)) {
@@ -255,9 +285,9 @@ int hw_doctor(int radio_port, int api_port)
            "enable the UART (enable_uart=1) and remove the serial console", "dialout");
     device(rail_path(), W_OK, "5V rail control for the cap", "the ext_5v_out control is not present on this image", "gpio");
     check(hw_status() == 0, "LoRa cap antenna switch",
-          "power off, attach the cap, power on; then 'systemctl restart meshzero-radio'");
+          "power off, attach the cap, power on");
     check(tcp_port_open(radio_port), "Radio daemon API (local)",
-          "see 'journalctl -u meshzero-radio -n 40'");
+          "see 'journalctl -u meshzero -n 40'");
     check(tcp_port_open(api_port), "MeshZero API for clients", "see 'journalctl -u meshzero -n 40'");
     printf("%s\n", problems == 0 ? "All checks passed." : "Some checks failed; see above.");
     return problems == 0 ? 0 : 1;

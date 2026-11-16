@@ -1,24 +1,28 @@
 [Unit]
-Description=MeshZero API service (multi-client access to the radio, message history)
+Description=MeshZero (Meshtastic radio on the Cap LoRa-1262 and its API)
 Documentation=file:///usr/share/doc/meshzero/README.md
 After=network.target
-Wants=meshzero-radio.service
+# Only one process can own the radio.
+Conflicts=meshtasticd.service
 
 [Service]
 Type=simple
 User=meshzero
 Group=meshzero
+# Message history, plus the radio's node database and keys in radio/.
 StateDirectory=meshzero
 StateDirectoryMode=0755
 EnvironmentFile=-/etc/meshzero/meshzero.conf
-ExecStart=/usr/bin/meshzerod serve
+# Serves the API and runs the radio daemon while a LoRa cap is attached and
+# the radio is needed.
+ExecStart=/usr/bin/meshzerod serve --radio /usr/lib/meshzero/radio-start
+ExecStopPost=-/usr/bin/meshzerod hw off
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=yes
 PrivateTmp=yes
-PrivateDevices=yes
 
 [Install]
 WantedBy=multi-user.target

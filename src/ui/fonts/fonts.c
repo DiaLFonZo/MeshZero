@@ -9,7 +9,7 @@
  * ASCII and the UI symbols come from LVGL's pre-rendered Montserrat. Anything
  * else (accents, Cyrillic, Greek, ...) is rendered on demand from TrueType
  * files: Montserrat first so text keeps one typeface, then DejaVu Sans for
- * the wider character set.
+ * the wider character set, then Noto Emoji (single colour) for emoji.
  */
 
 static lv_font_t g_main;
@@ -43,6 +43,9 @@ static void* find_font(const char* name, size_t* size)
 #ifdef MESHZERO_DEV_FONT_DIR
                           MESHZERO_DEV_FONT_DIR,
 #endif
+#ifdef MESHZERO_DEV_EMOJI_DIR
+                          MESHZERO_DEV_EMOJI_DIR,
+#endif
                           "/usr/share/fonts/truetype/dejavu"};
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
         if (!dirs[i] || !dirs[i][0]) continue;
@@ -54,9 +57,14 @@ static void* find_font(const char* name, size_t* size)
     return NULL;
 }
 
-/* Builds base -> Montserrat TTF -> DejaVu TTF, skipping whatever is missing. */
+typedef struct {
+    const void* data;
+    size_t size;
+} blob_t;
+
+/* Builds base -> Montserrat TTF -> DejaVu TTF -> Noto Emoji TTF, skipping whatever is missing. */
 static void chain(lv_font_t* font, const lv_font_t* base, int size, const void* montserrat, size_t montserrat_size,
-                  const void* dejavu, size_t dejavu_size)
+                  const void* dejavu, size_t dejavu_size, blob_t emoji)
 {
     *font = *base;
     lv_font_t* tail = font;
@@ -70,9 +78,17 @@ static void chain(lv_font_t* font, const lv_font_t* base, int size, const void* 
     }
     if (dejavu) {
         lv_font_t* ttf = lv_tiny_ttf_create_data(dejavu, dejavu_size, size);
+        if (ttf) {
+            tail->fallback = ttf;
+            tail           = ttf;
+        }
+    }
+    if (emoji.data) {
+        lv_font_t* ttf = lv_tiny_ttf_create_data(emoji.data, emoji.size, size + 1);
         if (ttf) tail->fallback = ttf;
     }
 #else
+    (void)emoji;
     (void)size;
     (void)montserrat;
     (void)montserrat_size;
@@ -90,8 +106,10 @@ static void init(void)
     /* The buffers back the fonts for the life of the process. */
     const void* montserrat = find_font("Montserrat-Medium.ttf", &montserrat_size);
     const void* dejavu     = find_font("DejaVuSans.ttf", &dejavu_size);
-    chain(&g_main, &lv_font_montserrat_12, 12, montserrat, montserrat_size, dejavu, dejavu_size);
-    chain(&g_small, &lv_font_montserrat_10, 10, montserrat, montserrat_size, dejavu, dejavu_size);
+    blob_t emoji           = {NULL, 0};
+    emoji.data             = find_font("NotoEmoji-Medium.ttf", &emoji.size);
+    chain(&g_main, &lv_font_montserrat_12, 12, montserrat, montserrat_size, dejavu, dejavu_size, emoji);
+    chain(&g_small, &lv_font_montserrat_10, 10, montserrat, montserrat_size, dejavu, dejavu_size, emoji);
 }
 
 const lv_font_t* mz_font_main(void)

@@ -5,4 +5,5 @@ BIN=/usr/lib/meshzero/meshtasticd
 if [ "${MESHZERO_USE_SYSTEM_MESHTASTICD:-0}" = "1" ] && [ -x /usr/bin/meshtasticd ]; then
     BIN=/usr/bin/meshtasticd
 fi
+mkdir -p -m 0700 /var/lib/meshzero/radio
 exec "$BIN" -p "${MESHZERO_RADIO_PORT:-4404}" -d /var/lib/meshzero/radio -c /etc/meshzero/radio.yaml

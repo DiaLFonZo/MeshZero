@@ -75,14 +75,15 @@ public:
                 row("Radio", "starting...", true);
                 break;
             default:
-                row("Radio", "offline", true);
+                row("Radio", mesh.offline_text(), true);
                 break;
         }
-        const std::vector<std::string> addrs = local_addresses();
-        if (addrs.empty()) {
-            row("API address", "no network", true);
+        if (mesh.network_access != 1) {
+            row("Network access", "off");
         } else {
-            for (const auto& a : addrs) row("API address", a + ":4403");
+            const std::vector<std::string> addrs = local_addresses();
+            if (addrs.empty()) row("Network access", "no network", true);
+            for (const auto& a : addrs) row("Network access", a + ":4403");
         }
 
         if (mesh.ever_ready()) {
@@ -273,13 +274,13 @@ const char* const kHelp =
     "Green tick: delivered. Grey tick: relayed. Cross: failed.\n"
     "To message someone, open them in Nodes.\n\n"
     "OTHER APPS\n"
-    "The radio keeps running after you exit. MeshMonitor and other clients can connect to the API address on the "
-    "Radio page.\n\n"
+    "The radio keeps running after you exit. To use it from MeshMonitor or a phone, turn on Network access in "
+    "Setup. The address is on the Radio page.\n\n"
     "RADIO OFFLINE\n"
     "Power off, check the cap, power on. For details run:\n"
     "sudo -u meshzero meshzerod doctor\n\n"
-    "MeshZero " MESHZERO_VERSION "\n"
-    "Not affiliated with Meshtastic. Meshtastic is a registered trademark of Meshtastic LLC.";
+    "ABOUT\n"
+    "MeshZero " MESHZERO_VERSION;
 
 }  // namespace
 
@@ -295,7 +296,7 @@ std::unique_ptr<Screen> make_packet_log(App& app)
 
 std::unique_ptr<Screen> make_help(App& app)
 {
-    return make_text_view(app, LV_SYMBOL_LEFT " Help", kHelp);
+    return make_about_view(app, LV_SYMBOL_LEFT " Help", kHelp, "https://github.com/s0liton/MeshZero");
 }
 
 std::unique_ptr<Screen> make_tab(App& app, int tab)

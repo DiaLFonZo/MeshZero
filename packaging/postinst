@@ -2,7 +2,7 @@
 set -e
 
 if [ "$1" = "configure" ]; then
-    # Unprivileged account the two services run as.
+    # Unprivileged account the service runs as.
     if ! getent passwd meshzero >/dev/null; then
         adduser --system --group --no-create-home --home /var/lib/meshzero \
             meshzero >/dev/null
@@ -19,8 +19,8 @@ if [ "$1" = "configure" ]; then
     fi
     if [ -d /run/systemd/system ]; then
         systemctl daemon-reload || true
-        systemctl enable meshzero.service meshzero-radio.service >/dev/null 2>&1 || true
-        systemctl restart meshzero.service meshzero-radio.service || true
+        systemctl enable meshzero.service >/dev/null 2>&1 || true
+        systemctl restart meshzero.service || true
     fi
 fi
 exit 0

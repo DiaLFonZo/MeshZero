@@ -277,7 +277,7 @@ void App::update_chrome()
             color  = ui::c_warn();
             break;
         default:
-            status = "radio offline";
+            status = mesh.offline_text();
             color  = ui::c_error();
             break;
     }

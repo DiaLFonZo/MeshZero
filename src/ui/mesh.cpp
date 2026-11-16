@@ -93,6 +93,27 @@ void Mesh::set_state(LinkState s)
     events.push_back(ev);
 }
 
+std::string Mesh::radio_note()
+{
+    if (ready()) return "";
+    const uint64_t now = now_ms();
+    if (cap_checked_ms_ == 0 || now - cap_checked_ms_ > 1000) {
+        cap_checked_ms_ = now;
+        std::ifstream in(history_dir() + "/radio-status");
+        radio_note_.clear();
+        std::getline(in, radio_note_);
+    }
+    return radio_note_;
+}
+
+std::string Mesh::offline_text()
+{
+    const std::string note = radio_note();
+    if (note == "nocap") return "no LoRa cap";
+    if (note == "starting" || note == "stopped") return "starting radio";
+    return "radio offline";
+}
+
 void Mesh::toast(const std::string& text)
 {
     UiEvent ev;
@@ -147,6 +168,29 @@ void Mesh::send_to_radio(const meshtastic_ToRadio& msg)
 {
     if (fd_ < 0 || state_ == LinkState::Connecting || state_ == LinkState::Disconnected) return;
     out_ += frame_wrap(pb_encode_msg(meshtastic_ToRadio_fields, msg));
+}
+
+void Mesh::send_control(const std::string& request)
+{
+    meshtastic_ToRadio msg    = meshtastic_ToRadio_init_zero;
+    msg.which_payload_variant = meshtastic_ToRadio_packet_tag;
+    meshtastic_MeshPacket& p  = msg.packet;
+    p.which_payload_variant   = meshtastic_MeshPacket_decoded_tag;
+    p.decoded.portnum         = meshtastic_PortNum_PRIVATE_APP;
+    const std::string text    = "mz:" + request;
+    memcpy(p.decoded.payload.bytes, text.data(), text.size());
+    p.decoded.payload.size = static_cast<pb_size_t>(text.size());
+    send_to_radio(msg);
+}
+
+void Mesh::set_background(bool on)
+{
+    send_control(on ? "bg=1" : "bg=0");
+}
+
+void Mesh::set_network_access(bool on)
+{
+    send_control(on ? "net=1" : "net=0");
 }
 
 void Mesh::request_config()
@@ -355,6 +399,7 @@ void Mesh::on_frame(const std::string& payload)
                 if (!history_loaded_) load_history();
                 ever_ready_ = true;
                 set_state(LinkState::Ready);
+                send_control("net?");
                 ++rev_nodes;
                 ++rev_chats;
                 ++rev_config;
@@ -408,6 +453,19 @@ void Mesh::log_packet(const meshtastic_MeshPacket& p, bool outgoing)
 
 void Mesh::on_packet(const meshtastic_MeshPacket& p)
 {
+    // Answers from the MeshZero service itself, not from the mesh.
+    if (p.from == 0 && p.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
+        p.decoded.portnum == meshtastic_PortNum_PRIVATE_APP) {
+        const std::string text(reinterpret_cast<const char*>(p.decoded.payload.bytes), p.decoded.payload.size);
+        if (text == "mz:net=1" || text == "mz:net=0") {
+            network_access = text.back() == '1' ? 1 : 0;
+        } else if (text == "mz:bg=1" || text == "mz:bg=0") {
+            background = text.back() == '1' ? 1 : 0;
+        }
+        ++rev_link;
+        ++rev_config;
+        return;
+    }
     log_packet(p, false);
 
     // Anything we hear from a node proves it is alive.

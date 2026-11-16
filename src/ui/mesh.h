@@ -73,6 +73,12 @@ public:
     bool ready() const { return state_ == LinkState::Ready; }
     // True between the first successful sync and now, even across reconnects.
     bool ever_ready() const { return ever_ready_; }
+    // Why the radio is down, as reported by the service: "nocap", "starting",
+    // "stopped", or empty when unknown.
+    std::string radio_note();
+    bool cap_missing() { return radio_note() == "nocap"; }
+    // Short text for the state above.
+    std::string offline_text();
     void resync();
 
     // ---- state -------------------------------------------------------
@@ -141,6 +147,14 @@ public:
     void factory_reset(bool full);
     void nodedb_reset();
 
+    // ---- service ----------------------------------------------------
+    // Whether other devices on the network may use the API: -1 unknown, 0, 1.
+    int network_access = -1;
+    void set_network_access(bool on);
+    // Whether the radio keeps running with the app closed: -1 unknown, 0, 1.
+    int background = -1;
+    void set_background(bool on);
+
     void toast(const std::string& text);
 
 private:
@@ -148,6 +162,7 @@ private:
     void start_connect();
     void send_to_radio(const meshtastic_ToRadio& msg);
     void request_config();
+    void send_control(const std::string& request);
     uint32_t send_packet(uint32_t to, uint8_t channel, meshtastic_PortNum port, const uint8_t* payload, size_t len,
                          bool want_ack, bool want_response);
     void on_frame(const std::string& payload);
@@ -177,6 +192,8 @@ private:
     uint32_t nonce_           = 0;
     uint32_t id_seq_          = 0;
     bool history_loaded_      = false;
+    std::string radio_note_;
+    uint64_t cap_checked_ms_  = 0;
     bool has_active_          = false;
     ChatKey active_;
     std::map<uint32_t, ChatKey> pending_acks_;  // packet id -> conversation

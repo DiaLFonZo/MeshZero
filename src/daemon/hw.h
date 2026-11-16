@@ -8,6 +8,13 @@ namespace mz {
 // PI4IOE5V6408 expander). Returns false when a required step failed.
 bool hw_power(bool on);
 
+// Whether a LoRa cap is attached, judged by its IO expander answering.
+// Unknown means it could not be checked (no access to the bus or the rail, or
+// MESHZERO_CAP_DETECT=0), and callers then carry on as if it were there.
+enum class Cap { Present, Absent, Unknown };
+Cap hw_cap_probe(bool patient);
+const char* hw_cap_name(Cap cap);
+
 // Prints the current rail and expander state. Returns a process exit code.
 int hw_status();
 

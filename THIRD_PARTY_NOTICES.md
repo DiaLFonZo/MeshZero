@@ -44,8 +44,12 @@ its text and symbols.
 
 `Montserrat-Medium.ttf` (SIL Open Font License 1.1) and `DejaVuSans.ttf`
 (Bitstream Vera / DejaVu license) are installed in `/usr/share/meshzero/fonts`
-to render characters outside ASCII. Their license texts are installed in
-`/usr/share/doc/meshzero/font-licenses`.
+to render characters outside ASCII. `NotoEmoji-Medium.ttf` (SIL Open Font
+License 1.1, Copyright 2013 Google LLC) is installed next to them for emoji.
+It is a fixed-weight copy (weight 500) made from the variable Noto Emoji font
+at https://github.com/google/fonts/tree/main/ofl/notoemoji with fontTools, and
+is kept in `assets/fonts` together with its license. The license texts are
+installed in `/usr/share/doc/meshzero/font-licenses`.
 
 ## Trademark
 

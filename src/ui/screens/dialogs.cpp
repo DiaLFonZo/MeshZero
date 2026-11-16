@@ -8,7 +8,9 @@ namespace {
 
 class TextViewScreen : public Screen {
 public:
-    TextViewScreen(App& a, std::string title, const std::string& text) : Screen(a), title_(std::move(title))
+    // With a link, the text is followed by a credit line and a QR code for it.
+    TextViewScreen(App& a, std::string title, const std::string& text, const std::string& link = "")
+        : Screen(a), title_(std::move(title))
     {
         lv_obj_add_flag(root, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_scroll_dir(root, LV_DIR_VER);
@@ -20,6 +22,39 @@ public:
         lv_obj_set_pos(l, 6, 3);
         lv_obj_set_width(l, kContentW - 14);
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        if (link.empty()) return;
+
+        lv_obj_update_layout(l);
+        int y = lv_obj_get_y(l) + lv_obj_get_height(l) + 4;
+        lv_obj_t* made = ui::label(root, "Made with", ui::c_text());
+        lv_obj_set_pos(made, 6, y);
+        lv_obj_update_layout(made);
+        lv_obj_t* heart = ui::label(root, "\xE2\x9D\xA4", lv_color_hex(0xE0304A));
+        lv_obj_set_pos(heart, lv_obj_get_x(made) + lv_obj_get_width(made) + 4, y);
+        lv_obj_update_layout(heart);
+        lv_obj_t* by = ui::label(root, "by s0liton", ui::c_text());
+        lv_obj_set_pos(by, lv_obj_get_x(heart) + lv_obj_get_width(heart) + 4, y);
+        y += ui::kRowH + 2;
+
+        const int size = 90;
+        lv_obj_t* qr   = lv_qrcode_create(root);
+        lv_qrcode_set_size(qr, size);
+        lv_qrcode_set_dark_color(qr, lv_color_black());
+        lv_qrcode_set_light_color(qr, lv_color_white());
+        lv_obj_set_style_border_color(qr, lv_color_white(), 0);
+        lv_obj_set_style_border_width(qr, 3, 0);
+        lv_obj_set_pos(qr, 6, y);
+        const bool ok = lv_qrcode_update(qr, link.c_str(), static_cast<uint32_t>(link.size())) == LV_RESULT_OK;
+        if (!ok) lv_obj_add_flag(qr, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_t* url = ui::label(root, link, ui::c_dim(), ui::font_small());
+        lv_obj_set_pos(url, ok ? size + 18 : 6, y);
+        lv_obj_set_width(url, kContentW - (ok ? size + 26 : 14));
+        lv_label_set_long_mode(url, LV_LABEL_LONG_WRAP);
+        // Room under the code so it can be scrolled fully into view.
+        lv_obj_t* end = lv_obj_create(root);
+        lv_obj_remove_style_all(end);
+        lv_obj_set_size(end, 1, 4);
+        lv_obj_set_pos(end, 0, y + (ok ? size + 6 : ui::kRowH));
     }
     std::string title() const override { return title_; }
     std::string hint() const override { return "Up/Down scroll   Esc back"; }
@@ -197,6 +232,12 @@ private:
 std::unique_ptr<Screen> make_text_view(App& app, const std::string& title, const std::string& text)
 {
     return std::make_unique<TextViewScreen>(app, title, text);
+}
+
+std::unique_ptr<Screen> make_about_view(App& app, const std::string& title, const std::string& text,
+                                        const std::string& link)
+{
+    return std::make_unique<TextViewScreen>(app, title, text, link);
 }
 
 std::unique_ptr<Screen> make_confirm(App& app, const std::string& title, const std::string& message,

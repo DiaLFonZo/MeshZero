@@ -46,9 +46,12 @@ public:
         if (!mesh.ever_ready()) {
             lv_obj_add_flag(list_->obj(), LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(empty_, LV_OBJ_FLAG_HIDDEN);
-            ui::set_text(empty_, mesh.state() == LinkState::Syncing
+            const std::string note = mesh.radio_note();
+            ui::set_text(empty_, mesh.state() == LinkState::Syncing || note == "starting" || note == "stopped"
                                      ? "Starting radio..."
-                                     : "Radio offline\n\nCheck that the LoRa cap is attached.");
+                                     : mesh.cap_missing()
+                                           ? "No LoRa cap\n\nPower off, attach the cap, power on."
+                                           : "Radio offline\n\nCheck that the LoRa cap is attached.");
             return;
         }
         lv_obj_add_flag(empty_, LV_OBJ_FLAG_HIDDEN);

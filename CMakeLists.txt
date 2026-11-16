@@ -72,7 +72,8 @@ if(MESHZERO_BUILD_UI)
     set(MESHZERO_FONT_SOURCE_DIR "${lvgl_src_SOURCE_DIR}/scripts/built_in_font")
     target_compile_definitions(meshzero PRIVATE
         MESHZERO_VERSION="${PROJECT_VERSION}"
-        MESHZERO_DEV_FONT_DIR="${MESHZERO_FONT_SOURCE_DIR}")
+        MESHZERO_DEV_FONT_DIR="${MESHZERO_FONT_SOURCE_DIR}"
+        MESHZERO_DEV_EMOJI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts")
 
     if(MESHZERO_SDL)
         find_package(SDL2 REQUIRED)

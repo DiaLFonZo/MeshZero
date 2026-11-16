@@ -7,6 +7,7 @@ Python client as the API consumer.
     tests/test_proxy.py build/host/meshzerod
 """
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RADIO_PORT = 4425
 API_PORT = 4426
 MY_NUM = 0x4D5A0001
+NETWORK_ADDR = "127.0.0.2"  # stands in for the address other devices would use
 
 
 def wait_for(predicate, timeout=10.0, what="condition"):
@@ -32,13 +34,21 @@ def wait_for(predicate, timeout=10.0, what="condition"):
     raise AssertionError("timed out waiting for " + what)
 
 
+def can_connect(host):
+    try:
+        socket.create_connection((host, API_PORT), timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
 def main():
     daemon = sys.argv[1] if len(sys.argv) > 1 else str(ROOT / "build/host/meshzerod")
     state = tempfile.mkdtemp(prefix="mzproxy")
     radio = subprocess.Popen([sys.executable, str(ROOT / "tools/fakeradio.py"), "--port", str(RADIO_PORT), "--quiet-mesh"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
-    proxy = subprocess.Popen([daemon, "serve", "--listen", "127.0.0.1", "--port", str(API_PORT), "--radio-port",
+    proxy = subprocess.Popen([daemon, "serve", "--listen", NETWORK_ADDR, "--port", str(API_PORT), "--radio-port",
                               str(RADIO_PORT)], env=dict(os.environ, MESHZERO_STATE_DIR=state),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
@@ -91,6 +101,26 @@ def main():
         clients.append(c)
         assert c.localNode.channels[2].settings.name == "Hiking", "late client did not see the new channel"
         print("ok: configuration cache refreshed after a settings change")
+
+        # Other devices are kept out until network access is turned on.
+        assert not can_connect(NETWORK_ADDR), "API reachable from the network by default"
+        a.sendData(b"mz:net=1", destinationId=0, portNum=256)
+        wait_for(lambda: can_connect(NETWORK_ADDR), what="network access to open")
+        assert can_connect("127.0.0.1"), "local access lost when network access was turned on"
+        remote = TCPInterface(NETWORK_ADDR, portNumber=API_PORT)
+        clients.append(remote)
+        assert remote.myInfo.my_node_num == MY_NUM
+        # A client that is not on this device cannot change the setting.
+        remote.sendData(b"mz:net=0", destinationId=0, portNum=256)
+        time.sleep(1.5)
+        assert can_connect(NETWORK_ADDR), "a remote client turned network access off"
+        subprocess.run([daemon, "network", "off"], env=dict(os.environ, MESHZERO_STATE_DIR=state), check=True,
+                       stdout=subprocess.DEVNULL)
+        wait_for(lambda: not can_connect(NETWORK_ADDR), what="network access to close")
+        assert can_connect("127.0.0.1")
+        clients.remove(remote)
+        remote.close()
+        print("ok: network access is off by default and can be switched on and off")
 
         # Clients come and go without disturbing the others.
         b.close()

@@ -26,6 +26,7 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -57,6 +58,12 @@ void logf(const char* fmt, ...)
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fputc('\n', stderr);
+}
+
+const char* env_or(const char* name, const char* fallback)
+{
+    const char* v = getenv(name);
+    return v && v[0] ? v : fallback;
 }
 
 void set_nonblock(int fd)
@@ -91,8 +98,58 @@ struct Client {
     bool want_config    = false;
     uint32_t nonce      = 0;
     bool closing        = false;
+    bool local          = false;  // connected from this device
+    bool wants_control  = false;  // has asked about the service settings
     uint64_t connected  = 0;
 };
+
+// Requests to the service itself travel as packets to node 0 on the private
+// port with this prefix. They are accepted from this device only and are
+// never passed on to the radio.
+constexpr char kControlPrefix[] = "mz:";
+
+std::string access_path()
+{
+    return history_dir() + "/network-access";
+}
+
+bool read_network_access()
+{
+    FILE* f = fopen(access_path().c_str(), "r");
+    if (!f) return false;
+    const int ch = fgetc(f);
+    fclose(f);
+    return ch == '1';
+}
+
+bool write_flag(const std::string& path, bool on)
+{
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) return false;
+    fputs(on ? "1\n" : "0\n", f);
+    return fclose(f) == 0;
+}
+
+bool write_network_access(bool on)
+{
+    return write_flag(access_path(), on);
+}
+
+// Whether the radio keeps running while no app is using it. On unless
+// switched off, so that messages are received with the app closed.
+std::string background_path()
+{
+    return history_dir() + "/background";
+}
+
+bool read_background()
+{
+    FILE* f = fopen(background_path().c_str(), "r");
+    if (!f) return true;
+    const int ch = fgetc(f);
+    fclose(f);
+    return ch != '0';
+}
 
 class Proxy {
 public:
@@ -106,7 +163,12 @@ public:
     }
 
     bool start_listening();
+    int listen_on(const std::string& bind_addr);
     void run();
+    void set_network_access(bool on) { net_access_ = on; }
+    // Makes this process start and stop the radio daemon itself.
+    void set_radio_command(std::string cmd) { radio_cmd_ = std::move(cmd); }
+    void shutdown();
 
 private:
     // upstream
@@ -122,7 +184,7 @@ private:
     void broadcast_changes(const ConfigCache& before, const ConfigCache& after);
 
     // clients
-    void accept_client();
+    void accept_client(int listen_fd);
     void client_read(Client& c);
     void client_flush(Client& c);
     void client_send(Client& c, const std::string& payload);
@@ -130,6 +192,13 @@ private:
     void serve_config(Client& c);
     void broadcast(const std::string& payload, const Client* except = nullptr);
     void drop_all_clients();
+    void on_control(Client& c, const std::string& request);
+    void send_control(Client& c);
+    void apply_network_access(bool on);
+    void watch_radio(bool asked);
+    void start_radio();
+    void stop_radio(const char* why);
+    void reap_radio();
 
     // history
     void record_incoming(const meshtastic_MeshPacket& p);
@@ -140,7 +209,23 @@ private:
     std::string bind_addr_;
     uint16_t listen_port_;
 
-    int listen_fd_   = -1;
+    std::vector<int> listen_fds_;
+    bool net_access_ = false;  // listen on bind_addr_ instead of loopback only
+    uint64_t last_access_check_ms_ = 0;
+    uint64_t last_radio_watch_ms_  = 0;
+    uint64_t last_client_ms_       = 0;
+    bool background_               = true;
+
+    // The radio daemon, when this process runs it (radio_cmd_ set).
+    std::string radio_cmd_;
+    pid_t radio_pid_           = -1;
+    uint64_t radio_started_ms_ = 0;
+    uint64_t radio_stop_ms_    = 0;  // when it was asked to stop, 0 if not
+    uint64_t radio_retry_ms_   = 0;  // earliest next start
+    uint64_t radio_backoff_ms_ = 0;
+    uint64_t radio_idle_ms_    = 0;  // since when nobody has needed it
+    int cap_misses_            = 0;
+    std::string radio_status_;
     int upstream_fd_ = -1;
     bool upstream_connecting_ = false;
     FrameParser upstream_parser_;
@@ -163,26 +248,44 @@ private:
     std::mt19937 rng_;
 };
 
-bool Proxy::start_listening()
+int Proxy::listen_on(const std::string& bind_addr)
 {
-    listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd_ < 0) return false;
+    const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
     int one = 1;
-    setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons(listen_port_);
-    if (inet_pton(AF_INET, bind_addr_.c_str(), &addr.sin_addr) != 1) {
-        logf("invalid bind address %s", bind_addr_.c_str());
-        return false;
+    if (inet_pton(AF_INET, bind_addr.c_str(), &addr.sin_addr) != 1) {
+        logf("invalid bind address %s", bind_addr.c_str());
+        close(fd);
+        return -1;
     }
-    if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0 || listen(listen_fd_, 16) < 0) {
-        logf("cannot listen on %s:%u: %s", bind_addr_.c_str(), listen_port_, strerror(errno));
-        return false;
+    if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0 || listen(fd, 16) < 0) {
+        logf("cannot listen on %s:%u: %s", bind_addr.c_str(), listen_port_, strerror(errno));
+        close(fd);
+        return -1;
     }
-    set_nonblock(listen_fd_);
-    logf("API listening on %s:%u, radio at %s:%u", bind_addr_.c_str(), listen_port_, upstream_host_.c_str(),
-         upstream_port_);
+    set_nonblock(fd);
+    logf("API listening on %s:%u", bind_addr.c_str(), listen_port_);
+    return fd;
+}
+
+// This device can always connect. Other devices can once network access is on.
+bool Proxy::start_listening()
+{
+    for (int fd : listen_fds_) close(fd);
+    listen_fds_.clear();
+    const bool everywhere = net_access_ && bind_addr_ == "0.0.0.0";
+    const int local       = listen_on(everywhere ? bind_addr_ : "127.0.0.1");
+    if (local < 0) return false;
+    listen_fds_.push_back(local);
+    if (net_access_ && !everywhere && bind_addr_ != "127.0.0.1") {
+        const int extra = listen_on(bind_addr_);
+        if (extra < 0) return false;
+        listen_fds_.push_back(extra);
+    }
     return true;
 }
 
@@ -409,12 +512,12 @@ void Proxy::upstream_read()
 
 // ----------------------------------------------------------------- clients
 
-void Proxy::accept_client()
+void Proxy::accept_client(int listen_fd)
 {
     while (true) {
         sockaddr_in addr{};
         socklen_t len = sizeof(addr);
-        const int fd  = accept(listen_fd_, reinterpret_cast<sockaddr*>(&addr), &len);
+        const int fd  = accept(listen_fd, reinterpret_cast<sockaddr*>(&addr), &len);
         if (fd < 0) return;
         set_nonblock(fd);
         int one = 1;
@@ -425,9 +528,15 @@ void Proxy::accept_client()
         char ip[32] = {};
         inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
         c->peer      = std::string(ip) + ":" + std::to_string(ntohs(addr.sin_port));
+        sockaddr_in own{};
+        socklen_t own_len = sizeof(own);
+        getsockname(fd, reinterpret_cast<sockaddr*>(&own), &own_len);
+        c->local = ntohl(own.sin_addr.s_addr) == INADDR_LOOPBACK && (ntohl(addr.sin_addr.s_addr) >> 24) == 127;
         c->connected = now_ms();
         logf("client connected: %s", c->peer.c_str());
+        const bool radio_down = upstream_fd_ < 0 || upstream_connecting_;
         clients_.push_back(std::move(c));
+        if (radio_down) watch_radio(true);
     }
 }
 
@@ -561,6 +670,13 @@ void Proxy::on_to_radio(Client& c, const std::string& payload)
                 upstream_send(payload);
                 return;
             }
+            if (p.to == 0 && p.decoded.portnum == meshtastic_PortNum_PRIVATE_APP) {
+                const std::string text(reinterpret_cast<const char*>(p.decoded.payload.bytes), p.decoded.payload.size);
+                if (text.rfind(kControlPrefix, 0) == 0) {
+                    if (c.local) on_control(c, text.substr(sizeof(kControlPrefix) - 1));
+                    return;
+                }
+            }
             bool reencode = false;
             if (p.id == 0) {
                 // Give every packet an id so acknowledgements can be matched.
@@ -594,6 +710,183 @@ void Proxy::on_to_radio(Client& c, const std::string& payload)
         default:
             upstream_send(payload);
             return;
+    }
+}
+
+// ------------------------------------------------------------------ radio
+
+// Runs the radio daemon only while a LoRa cap is attached and somebody needs
+// the radio, so the cap is free for other apps the rest of the time. Also
+// leaves a note for the app on why the radio is down.
+void Proxy::watch_radio(bool asked)
+{
+    if (radio_cmd_.empty()) return;
+    const uint64_t now = now_ms();
+    reap_radio();
+
+    // With background running off, the radio is only needed while somebody is
+    // connected, plus a moment so a reconnect does not restart it.
+    if (!clients_.empty()) last_client_ms_ = now;
+    const bool wanted = background_ || !clients_.empty() || (last_client_ms_ != 0 && now - last_client_ms_ < 10000);
+    const bool up     = upstream_fd_ >= 0 && !upstream_connecting_;
+    std::string status = up ? "ok" : "starting";
+
+    if (radio_pid_ > 0) {
+        if (radio_stop_ms_ != 0) {
+            if (now - radio_stop_ms_ > 5000) kill(radio_pid_, SIGKILL);
+        } else if (!wanted) {
+            if (radio_idle_ms_ == 0) radio_idle_ms_ = now;
+            if (now - radio_idle_ms_ > 2000) stop_radio("not needed");
+        } else {
+            radio_idle_ms_ = 0;
+            // One missed answer can be a bus glitch; three in a row means the cap is gone.
+            cap_misses_ = hw_cap_probe(false) == Cap::Absent ? cap_misses_ + 1 : 0;
+            if (cap_misses_ >= 3) stop_radio("LoRa cap removed");
+        }
+    } else if (!wanted) {
+        status = "stopped";
+    } else {
+        if (asked) radio_retry_ms_ = 0;  // somebody just opened the app: try now
+        if (hw_cap_probe(false) == Cap::Absent) {
+            status = "nocap";
+        } else if (now >= radio_retry_ms_) {
+            start_radio();
+        }
+    }
+
+    if (status != radio_status_) {
+        radio_status_ = status;
+        if (FILE* f = fopen((history_dir() + "/radio-status").c_str(), "w")) {
+            fprintf(f, "%s\n", status.c_str());
+            fclose(f);
+        }
+        if (status == "nocap") logf("no LoRa cap attached, waiting for one");
+    }
+}
+
+void Proxy::start_radio()
+{
+    hw_power(true);
+    const pid_t pid = fork();
+    if (pid < 0) {
+        logf("cannot start the radio daemon: %s", strerror(errno));
+        radio_retry_ms_ = now_ms() + 10000;
+        return;
+    }
+    if (pid == 0) {
+        // The daemon keeps this node's private key, so its files stay private.
+        umask(0077);
+        signal(SIGPIPE, SIG_DFL);
+        execl(radio_cmd_.c_str(), radio_cmd_.c_str(), static_cast<char*>(nullptr));
+        fprintf(stderr, "meshzerod: cannot run %s: %s\n", radio_cmd_.c_str(), strerror(errno));
+        _exit(127);
+    }
+    radio_pid_        = pid;
+    radio_started_ms_ = now_ms();
+    radio_stop_ms_    = 0;
+    radio_idle_ms_    = 0;
+    cap_misses_       = 0;
+    logf("radio daemon started (pid %d)", static_cast<int>(pid));
+}
+
+void Proxy::stop_radio(const char* why)
+{
+    if (radio_pid_ <= 0 || radio_stop_ms_ != 0) return;
+    logf("stopping the radio daemon: %s", why);
+    kill(radio_pid_, SIGTERM);
+    radio_stop_ms_ = now_ms();
+}
+
+void Proxy::reap_radio()
+{
+    if (radio_pid_ <= 0) return;
+    int status = 0;
+    if (waitpid(radio_pid_, &status, WNOHANG) != radio_pid_) return;
+    const uint64_t now = now_ms();
+    if (radio_stop_ms_ != 0) {
+        // Stopped on purpose: nothing to wait for before the next start.
+        radio_backoff_ms_ = 0;
+        radio_retry_ms_   = 0;
+        hw_power(false);
+    } else {
+        // It died. Retry, slower each time unless it had been running fine.
+        if (now - radio_started_ms_ > 60000) radio_backoff_ms_ = 0;
+        radio_backoff_ms_ = radio_backoff_ms_ == 0 ? 10000 : std::min<uint64_t>(radio_backoff_ms_ * 2, 120000);
+        radio_retry_ms_   = now + radio_backoff_ms_;
+        logf("radio daemon exited (status %d), next try in %llu s", WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+             static_cast<unsigned long long>(radio_backoff_ms_ / 1000));
+    }
+    radio_pid_     = -1;
+    radio_stop_ms_ = 0;
+}
+
+void Proxy::shutdown()
+{
+    if (radio_pid_ <= 0) return;
+    stop_radio("service stopping");
+    for (int i = 0; i < 50 && waitpid(radio_pid_, nullptr, WNOHANG) != radio_pid_; ++i) usleep(100000);
+    if (waitpid(radio_pid_, nullptr, WNOHANG) == 0) {
+        kill(radio_pid_, SIGKILL);
+        waitpid(radio_pid_, nullptr, 0);
+    }
+    radio_pid_ = -1;
+    hw_power(false);
+}
+
+// ---------------------------------------------------------------- control
+
+void Proxy::send_control(Client& c)
+{
+    meshtastic_FromRadio msg  = meshtastic_FromRadio_init_zero;
+    msg.which_payload_variant = meshtastic_FromRadio_packet_tag;
+    meshtastic_MeshPacket& p  = msg.packet;
+    p.which_payload_variant   = meshtastic_MeshPacket_decoded_tag;
+    p.decoded.portnum         = meshtastic_PortNum_PRIVATE_APP;
+    for (const std::string& setting : {std::string("net=") + (net_access_ ? "1" : "0"),
+                                       std::string("bg=") + (background_ ? "1" : "0")}) {
+        const std::string text = kControlPrefix + setting;
+        memcpy(p.decoded.payload.bytes, text.data(), text.size());
+        p.decoded.payload.size = static_cast<pb_size_t>(text.size());
+        client_send(c, pb_encode_msg(meshtastic_FromRadio_fields, msg));
+    }
+}
+
+void Proxy::on_control(Client& c, const std::string& request)
+{
+    c.wants_control = true;
+    if (request == "net=1" || request == "net=0") {
+        const bool on = request == "net=1";
+        if (!write_network_access(on)) logf("cannot save %s: %s", access_path().c_str(), strerror(errno));
+        if (on != net_access_) {
+            apply_network_access(on);  // tells every client that asked, this one included
+            return;
+        }
+    }
+    if (request == "bg=1" || request == "bg=0") {
+        background_ = request == "bg=1";
+        if (!write_flag(background_path(), background_)) logf("cannot save %s: %s", background_path().c_str(), strerror(errno));
+        logf("running in the background %s", background_ ? "on" : "off");
+        watch_radio(true);
+        for (auto& other : clients_) {
+            if (other->wants_control && other.get() != &c) send_control(*other);
+        }
+    }
+    send_control(c);
+}
+
+void Proxy::apply_network_access(bool on)
+{
+    if (on == net_access_) return;
+    net_access_ = on;
+    logf("network access %s", on ? "on" : "off");
+    if (!start_listening()) {
+        // Fall back to this device only so the app keeps working.
+        net_access_ = false;
+        start_listening();
+    }
+    for (auto& c : clients_) {
+        if (!net_access_ && !c->local) c->closing = true;
+        if (c->wants_control) send_control(*c);
     }
 }
 
@@ -679,6 +972,17 @@ void Proxy::run()
 {
     while (!g_stop) {
         const uint64_t now = now_ms();
+        if (now - last_access_check_ms_ > 1000) {
+            // 'meshzerod network on|off' changes the setting from a shell.
+            last_access_check_ms_ = now;
+            apply_network_access(read_network_access());
+            background_ = read_background();
+            if (listen_fds_.empty()) start_listening();
+        }
+        if (now - last_radio_watch_ms_ > (radio_status_ == "nocap" || (radio_pid_ > 0 && radio_stop_ms_ == 0 && background_) ? 5000 : 1000)) {
+            last_radio_watch_ms_ = now;
+            watch_radio(false);
+        }
         if (upstream_fd_ < 0 && now >= next_connect_ms_) {
             upstream_connect();
             if (upstream_fd_ < 0) next_connect_ms_ = now + kReconnectMs;
@@ -701,7 +1005,8 @@ void Proxy::run()
         }
 
         std::vector<pollfd> fds;
-        fds.push_back({listen_fd_, POLLIN, 0});
+        for (int fd : listen_fds_) fds.push_back({fd, POLLIN, 0});
+        const size_t listeners = fds.size();
         if (upstream_fd_ >= 0) {
             short events = POLLIN;
             if (upstream_connecting_ || !upstream_out_.empty()) events |= POLLOUT;
@@ -715,10 +1020,12 @@ void Proxy::run()
 
         if (poll(fds.data(), fds.size(), 250) < 0 && errno != EINTR) break;
 
-        if (fds[0].revents & POLLIN) accept_client();
+        for (size_t i = 0; i < listeners; ++i) {
+            if (fds[i].revents & POLLIN) accept_client(fds[i].fd);
+        }
 
-        if (first_client == 2 && upstream_fd_ == fds[1].fd) {
-            const short re = fds[1].revents;
+        if (first_client == listeners + 1 && upstream_fd_ == fds[listeners].fd) {
+            const short re = fds[listeners].revents;
             if (upstream_connecting_) {
                 if (re & (POLLOUT | POLLERR | POLLHUP)) {
                     int err       = 0;
@@ -762,7 +1069,7 @@ void Proxy::run()
     }
     for (auto& c : clients_) close(c->fd);
     if (upstream_fd_ >= 0) close(upstream_fd_);
-    if (listen_fd_ >= 0) close(listen_fd_);
+    for (int fd : listen_fds_) close(fd);
 }
 
 void on_signal(int)
@@ -774,16 +1081,14 @@ void usage()
 {
     fprintf(stderr,
             "meshzerod - API multiplexer and hardware helper for MeshZero\n\n"
-            "  meshzerod [serve] [--listen ADDR] [--port N] [--radio-host H] [--radio-port N] [-v]\n"
+            "  meshzerod [serve] [--listen ADDR] [--port N] [--radio-host H] [--radio-port N] [--radio CMD] [-v]\n"
+            "                                  --radio CMD: also run the radio daemon while the cap is attached\n"
+            "  meshzerod network on|off|status let other devices on the network use the API\n"
             "  meshzerod hw on|off|status      control power and antenna switch of the LoRa cap\n"
+            "  meshzerod hw present            exit 1 when no LoRa cap is attached\n"
+            "  meshzerod background on|off|status keep the radio running when no app is using it\n"
             "  meshzerod doctor                check that everything the radio needs is present\n\n"
             "Environment: MESHZERO_API_BIND, MESHZERO_API_PORT, MESHZERO_RADIO_PORT, MESHZERO_STATE_DIR\n");
-}
-
-const char* env_or(const char* name, const char* fallback)
-{
-    const char* v = getenv(name);
-    return v && v[0] ? v : fallback;
 }
 
 }  // namespace
@@ -794,6 +1099,7 @@ int main(int argc, char** argv)
     int listen_port        = atoi(env_or("MESHZERO_API_PORT", "4403"));
     std::string radio_host = env_or("MESHZERO_RADIO_HOST", "127.0.0.1");
     int radio_port         = atoi(env_or("MESHZERO_RADIO_PORT", "4404"));
+    std::string radio_cmd;
 
     int i = 1;
     if (i < argc && argv[i][0] != '-') {
@@ -802,7 +1108,32 @@ int main(int argc, char** argv)
             const std::string action = i < argc ? argv[i] : "status";
             if (action == "on") return hw_power(true) ? 0 : 1;
             if (action == "off") return hw_power(false) ? 0 : 1;
+            if (action == "present") {
+                const Cap cap = hw_cap_probe(true);
+                printf("LoRa cap: %s\n", hw_cap_name(cap));
+                return cap == Cap::Absent ? 1 : 0;
+            }
             return hw_status();
+        }
+        if (cmd == "background") {
+            const std::string action = i < argc ? argv[i] : "status";
+            if ((action == "on" || action == "off") && !write_flag(background_path(), action == "on")) {
+                fprintf(stderr, "cannot write %s: %s\nRun it as the service user: sudo -u meshzero meshzerod background %s\n",
+                        background_path().c_str(), strerror(errno), action.c_str());
+                return 1;
+            }
+            printf("Run in background: %s\n", read_background() ? "on" : "off (radio stops when no app is using it)");
+            return 0;
+        }
+        if (cmd == "network") {
+            const std::string action = i < argc ? argv[i] : "status";
+            if ((action == "on" || action == "off") && !write_network_access(action == "on")) {
+                fprintf(stderr, "cannot write %s: %s\nRun it as the service user: sudo -u meshzero meshzerod network %s\n",
+                        access_path().c_str(), strerror(errno), action.c_str());
+                return 1;
+            }
+            printf("Network access: %s\n", read_network_access() ? "on" : "off (this device only)");
+            return 0;
         }
         if (cmd == "doctor") return hw_doctor(radio_port, listen_port);
         if (cmd != "serve") {
@@ -819,6 +1150,8 @@ int main(int argc, char** argv)
             listen_port = atoi(next());
         } else if (a == "--radio-host") {
             radio_host = next();
+        } else if (a == "--radio") {
+            radio_cmd = next();
         } else if (a == "--radio-port") {
             radio_port = atoi(next());
         } else if (a == "-v") {
@@ -837,7 +1170,10 @@ int main(int argc, char** argv)
     mkdir(history_dir().c_str(), 0755);
 
     Proxy proxy(radio_host, static_cast<uint16_t>(radio_port), bind_addr, static_cast<uint16_t>(listen_port));
+    proxy.set_network_access(read_network_access());
+    proxy.set_radio_command(radio_cmd);
     if (!proxy.start_listening()) return 1;
     proxy.run();
+    proxy.shutdown();
     return 0;
 }

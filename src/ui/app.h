@@ -112,6 +112,9 @@ std::unique_ptr<Screen> make_packet_log(App& app);
 std::unique_ptr<Screen> make_region_picker(App& app, bool first_run);
 std::unique_ptr<Screen> make_channels(App& app);
 std::unique_ptr<Screen> make_help(App& app);
+// Scrollable text ending in the credit line and a QR code for the link.
+std::unique_ptr<Screen> make_about_view(App& app, const std::string& title, const std::string& text,
+                                        const std::string& link);
 
 // ---- generic dialogs (dialogs.cpp) ----------------------------------------
 std::unique_ptr<Screen> make_text_view(App& app, const std::string& title, const std::string& text);

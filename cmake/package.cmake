@@ -4,7 +4,7 @@
 # Everything that lands in a shared directory is named after the package, as
 # the store requires.
 
-set(MESHZERO_MAINTAINER "Pedro Santos <s0liton@users.noreply.github.com>" CACHE STRING "Debian package maintainer")
+set(MESHZERO_MAINTAINER "Pedro Santos <8346634+s0liton@users.noreply.github.com>" CACHE STRING "Debian package maintainer")
 set(MESHZERO_RADIO_BINARY "${CMAKE_CURRENT_SOURCE_DIR}/third_party/meshtasticd/arm64/meshtasticd"
     CACHE FILEPATH "Radio daemon binary to ship (see packaging/fetch-radio.sh)")
 option(MESHZERO_REQUIRE_RADIO "Fail when the radio daemon binary is missing" OFF)
@@ -16,7 +16,10 @@ if(TARGET meshzero)
     install(FILES
         "${MESHZERO_FONT_SOURCE_DIR}/Montserrat-Medium.ttf"
         "${MESHZERO_FONT_SOURCE_DIR}/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/NotoEmoji-Medium.ttf"
         DESTINATION /usr/share/meshzero/fonts)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/NotoEmoji-OFL.txt"
+        DESTINATION /usr/share/doc/meshzero/font-licenses/NotoEmoji RENAME OFL.txt)
     install(DIRECTORY
         "${MESHZERO_FONT_SOURCE_DIR}/font_license/Montserrat"
         "${MESHZERO_FONT_SOURCE_DIR}/font_license/DejaVuSans"
@@ -36,7 +39,7 @@ endif()
 
 install(PROGRAMS packaging/radio-start DESTINATION /usr/lib/meshzero)
 install(FILES packaging/radio.yaml packaging/meshzero.conf DESTINATION /etc/meshzero)
-install(FILES packaging/meshzero.service packaging/meshzero-radio.service DESTINATION /usr/lib/systemd/system)
+install(FILES packaging/meshzero.service DESTINATION /usr/lib/systemd/system)
 install(FILES packaging/tmpfiles.conf DESTINATION /usr/lib/tmpfiles.d RENAME meshzero.conf)
 install(FILES packaging/meshzero.desktop DESTINATION /usr/share/APPLaunch/applications)
 install(FILES assets/meshzero.png DESTINATION /usr/share/APPLaunch/share/images)

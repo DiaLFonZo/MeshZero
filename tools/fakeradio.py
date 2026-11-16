@@ -41,7 +41,7 @@ CHATTER = [
     (0xA1B2C307, "Base station is back up after the storm."),
     (0xA1B2C304, "Copy that, signal is great from the dunes."),
     (0xA1B2C305, "Testing from 14 km out, two hops."),
-    (0xA1B2C301, "Loud and clear Dirk."),
+    (0xA1B2C301, "Loud and clear Dirk \U0001F4E1\U0001F600 \u2764\ufe0f\U0001F525\u2600\ufe0f\U0001F37B"),
     (0xA1B2C306, "Gr\u00fc\u00dfe vom Hafen, se\u00f1al perfecta \U0001F44D \u041f\u0440\u0438\u0432\u0435\u0442!"),
 ]
 
