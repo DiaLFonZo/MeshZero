@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+if [ "$1" = "purge" ]; then
+    # Message history, node database and the node's keys.
+    STATE_DIR="/var/lib/meshzero"
+    if [ -d "$STATE_DIR" ]; then
+        rm -rf "$STATE_DIR"
+    fi
+    if getent passwd meshzero >/dev/null; then
+        deluser --system meshzero >/dev/null 2>&1 || true
+    fi
+fi
+exit 0

@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    # Unprivileged account the two services run as.
+    if ! getent passwd meshzero >/dev/null; then
+        adduser --system --group --no-create-home --home /var/lib/meshzero \
+            meshzero >/dev/null
+    fi
+    # Access to the radio (SPI, GPIO), the cap's IO expander (I2C) and the GNSS
+    # receiver (serial) comes from group membership, not from running as root.
+    for grp in spi gpio i2c dialout; do
+        if getent group "$grp" >/dev/null; then
+            adduser meshzero "$grp" >/dev/null 2>&1 || true
+        fi
+    done
+    if command -v systemd-tmpfiles >/dev/null 2>&1; then
+        systemd-tmpfiles --create /usr/lib/tmpfiles.d/meshzero.conf >/dev/null 2>&1 || true
+    fi
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+        systemctl enable meshzero.service meshzero-radio.service >/dev/null 2>&1 || true
+        systemctl restart meshzero.service meshzero-radio.service || true
+    fi
+fi
+exit 0

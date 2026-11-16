@@ -1,0 +1,25 @@
+# Regenerates the store screenshots: tools/uitest.sh tools/screenshots.txt
+wait 14000
+shot screenshots/1-chats.png
+key enter
+wait 300
+type On my way, see you at 8
+key enter
+wait 1500
+shot screenshots/2-channel.png
+key esc
+key tab
+wait 300
+shot screenshots/3-nodes.png
+key down down enter
+wait 300
+shot screenshots/4-node.png
+key esc
+key tab
+wait 300
+key + +
+wait 300
+shot screenshots/5-map.png
+key tab tab
+wait 300
+shot screenshots/6-setup.png

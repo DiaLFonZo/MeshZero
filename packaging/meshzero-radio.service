@@ -1,0 +1,29 @@
+[Unit]
+Description=MeshZero radio (Meshtastic daemon on the Cap LoRa-1262)
+Documentation=file:///usr/share/doc/meshzero/README.md
+After=network.target
+# Only one process can own the radio.
+Conflicts=meshtasticd.service
+
+[Service]
+Type=simple
+User=meshzero
+Group=meshzero
+# Holds the node database and this node's private key.
+StateDirectory=meshzero/radio
+StateDirectoryMode=0700
+UMask=0077
+EnvironmentFile=-/etc/meshzero/meshzero.conf
+# Powers the cap and enables its antenna switch.
+ExecStartPre=/usr/bin/meshzerod hw on
+ExecStart=/usr/lib/meshzero/radio-start
+ExecStopPost=-/usr/bin/meshzerod hw off
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

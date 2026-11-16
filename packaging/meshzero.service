@@ -1,0 +1,24 @@
+[Unit]
+Description=MeshZero API service (multi-client access to the radio, message history)
+Documentation=file:///usr/share/doc/meshzero/README.md
+After=network.target
+Wants=meshzero-radio.service
+
+[Service]
+Type=simple
+User=meshzero
+Group=meshzero
+StateDirectory=meshzero
+StateDirectoryMode=0755
+EnvironmentFile=-/etc/meshzero/meshzero.conf
+ExecStart=/usr/bin/meshzerod serve
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+
+[Install]
+WantedBy=multi-user.target

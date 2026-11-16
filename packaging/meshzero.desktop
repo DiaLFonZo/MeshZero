@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MeshZero
+Comment=Meshtastic client for the Cap LoRa-1262
+Exec=/usr/bin/meshzero
+Icon=share/images/meshzero.png
+Terminal=false
+Categories=Network;
+StartupNotify=false

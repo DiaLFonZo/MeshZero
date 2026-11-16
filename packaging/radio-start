@@ -1,0 +1,8 @@
+#!/bin/sh
+# Starts the radio daemon for MeshZero.
+set -eu
+BIN=/usr/lib/meshzero/meshtasticd
+if [ "${MESHZERO_USE_SYSTEM_MESHTASTICD:-0}" = "1" ] && [ -x /usr/bin/meshtasticd ]; then
+    BIN=/usr/bin/meshtasticd
+fi
+exec "$BIN" -p "${MESHZERO_RADIO_PORT:-4404}" -d /var/lib/meshzero/radio -c /etc/meshzero/radio.yaml
