@@ -29,25 +29,39 @@ other mesh networking technologies.
 - The Meshtastic TCP API on port 4403, for MeshMonitor, the `meshtastic` CLI
   or the phone apps over Wi-Fi. Enable that in settings.
 
-Potentially Roadmap:
-- Replies and tapbacks
-
 ## You need
 
 - CardputerZero on the official 64-bit Debian 13 image.
 - Cap LoRa-1262 with an appropriate antenna for your region.
 
-### Important
-Power the device off before you attach or remove the cap. It is not
-hot-pluggable. And don't transmit without an antenna.
+
+> [!IMPORTANT]
+> Power the device off before you attach or remove the cap. It is not
+hotswappable and can cause damage. Avoid using without an antenna attached.
+
 
 ## Install
 
-Get it from the CardputerZero store, or download the `.deb` from the releases
-page and install it yourself:
+### Store Install
+
+Get it directly from the built-in store: [MeshZero on Cardputer.cc](https://cardputer.cc/#/apps/MSH0) 
+
+### APT
 
 ```sh
-sudo apt install ./meshzero_0.1.0_arm64.deb
+sudo apt install ./meshzero_<version>_arm64.deb
+```
+
+### DPKG
+Install the dependencies first:
+
+```sh
+sudo apt install adduser libgpiod3 libi2c0 libinput10 liborcania2.3 libsdl2-2.0-0 libssl3t64 libulfius2.7t64 libusb-1.0-0 libuv1t64 libx11-6 libxkbcommon0 libyaml-cpp0.8
+```
+
+then install:
+``` sh
+sudo dpkg -i ./meshzero_<version>_arm64.deb
 ```
 
 ## Keys
