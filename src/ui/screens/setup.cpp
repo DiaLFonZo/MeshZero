@@ -5,7 +5,9 @@
 
 #include "common/util.h"
 #include "meshtastic/apponly.pb.h"
+#include "ui/camera.h"
 #include "ui/screens/editor.h"
+#include "ui/update.h"
 
 namespace mz {
 namespace {
@@ -64,6 +66,27 @@ std::string region_name(int value)
     return std::to_string(value);
 }
 
+// The band of a region in MHz, read from its description above. False for
+// regions described without one.
+bool region_band(int value, double& low, double& high)
+{
+    for (const auto& r : kRegions) {
+        if (r.value != value) continue;
+        for (const char* p = r.band; *p; ++p) {
+            if (*p < '0' || *p > '9') continue;
+            float a = 0, b = 0;
+            if (sscanf(p, "%f-%f MHz", &a, &b) == 2 && b >= a) {
+                low  = a;
+                high = b;
+                return true;
+            }
+            while ((*p >= '0' && *p <= '9') || *p == '.') ++p;
+            if (!*p) break;
+        }
+    }
+    return false;
+}
+
 std::vector<Opt> region_opts()
 {
     std::vector<Opt> opts;
@@ -74,24 +97,58 @@ std::vector<Opt> region_opts()
     return opts;
 }
 
-std::vector<Opt> preset_opts()
+// The presets the radio daemon shipped with MeshZero knows, with what each
+// stands for: bandwidth in kHz, spreading factor, coding rate 4/x. Taken from
+// modemPresetToParams() in the firmware's MeshRadio.h for that version. A
+// preset it does not know runs as LongFast there, so none of those (Lite,
+// Narrow, VeryLongSlow) are offered.
+struct PresetInfo {
+    int value;
+    const char* name;
+    int bw, sf, cr;
+};
+const PresetInfo kPresets[] = {
+    {meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST, "LongFast", 250, 11, 5},
+    {meshtastic_Config_LoRaConfig_ModemPreset_LONG_MODERATE, "LongModerate", 125, 11, 8},
+    {meshtastic_Config_LoRaConfig_ModemPreset_LONG_SLOW, "LongSlow", 125, 12, 8},
+    {meshtastic_Config_LoRaConfig_ModemPreset_LONG_TURBO, "LongTurbo", 500, 11, 8},
+    {meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_FAST, "MediumFast", 250, 9, 5},
+    {meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_SLOW, "MediumSlow", 250, 10, 5},
+    {meshtastic_Config_LoRaConfig_ModemPreset_SHORT_FAST, "ShortFast", 250, 7, 5},
+    {meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW, "ShortSlow", 250, 8, 5},
+    {meshtastic_Config_LoRaConfig_ModemPreset_SHORT_TURBO, "ShortTurbo", 500, 7, 5},
+};
+constexpr int kCustomModem = -1;
+
+// What a preset stands for; LongFast for one the radio does not know, as there.
+const PresetInfo& preset_info(int preset)
 {
-    return {
-        {meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST, "LongFast (default)"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_LONG_MODERATE, "LongModerate"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_LONG_SLOW, "LongSlow"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_LONG_TURBO, "LongTurbo"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_VERY_LONG_SLOW, "VeryLongSlow"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_FAST, "MediumFast"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_SLOW, "MediumSlow"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_SHORT_FAST, "ShortFast"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW, "ShortSlow"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_SHORT_TURBO, "ShortTurbo"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_LITE_FAST, "LiteFast"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_LITE_SLOW, "LiteSlow"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_NARROW_FAST, "NarrowFast"},
-        {meshtastic_Config_LoRaConfig_ModemPreset_NARROW_SLOW, "NarrowSlow"},
-    };
+    for (const PresetInfo& p : kPresets) {
+        if (p.value == preset) return p;
+    }
+    return kPresets[0];
+}
+
+std::vector<Opt> modem_opts()
+{
+    std::vector<Opt> opts;
+    for (const PresetInfo& p : kPresets) {
+        opts.push_back({p.value, std::string(p.name) + (p.value == kPresets[0].value ? "  (default)" : "")});
+    }
+    opts.push_back({kCustomModem, "Custom"});
+    return opts;
+}
+
+// Moves a working copy from a preset to modem values of its own, starting
+// from the ones the preset stood for.
+void make_custom(meshtastic_Config_LoRaConfig& l)
+{
+    if (!l.use_preset) return;
+    const PresetInfo& p = preset_info(l.modem_preset);
+    l.bandwidth         = static_cast<decltype(l.bandwidth)>(p.bw);
+    l.spread_factor     = static_cast<decltype(l.spread_factor)>(p.sf);
+    l.coding_rate       = static_cast<decltype(l.coding_rate)>(p.cr);
+    l.use_preset        = false;
 }
 
 // The protocol rounds a position to a grid; these are the cell sizes other
@@ -148,15 +205,54 @@ std::unique_ptr<Screen> page_user(App& app)
     return make_editor(app, "Your node", std::move(f), [&app, cfg]() { app.mesh.set_owner(*cfg); });
 }
 
+// Leftovers of a custom setup must not survive a move to another region or
+// to a preset: a frequency fixed for one band is wrong, and may be illegal,
+// in another, and custom modem values next to a preset only mislead. What the
+// user set in the same edit is theirs and stays.
+meshtastic_Config_LoRaConfig lora_cleaned(const meshtastic_Config_LoRaConfig& before, meshtastic_Config_LoRaConfig l)
+{
+    const bool region_changed = l.region != before.region;
+    const bool to_preset      = l.use_preset && (!before.use_preset || l.modem_preset != before.modem_preset);
+    if (l.use_preset) {
+        l.bandwidth     = 0;
+        l.spread_factor = 0;
+        l.coding_rate   = 0;
+    }
+    if (region_changed || to_preset) {
+        if (l.override_frequency == before.override_frequency) l.override_frequency = 0;
+        if (l.frequency_offset == before.frequency_offset) l.frequency_offset = 0;
+    }
+    if (region_changed && l.channel_num == before.channel_num) l.channel_num = 0;
+    // Whatever the history, a fixed frequency outside the region's band does not go to the radio.
+    double low = 0, high = 0;
+    if (l.override_frequency != 0 && region_band(l.region, low, high) &&
+        (l.override_frequency < low - 0.001 || l.override_frequency > high + 0.001)) {
+        l.override_frequency = 0;
+    }
+    return l;
+}
+
 std::unique_ptr<Screen> page_lora(App& app)
 {
-    auto cfg = std::make_shared<meshtastic_Config_LoRaConfig>(app.mesh.config.lora);
+    auto cfg    = std::make_shared<meshtastic_Config_LoRaConfig>(app.mesh.config.lora);
+    auto before = std::make_shared<meshtastic_Config_LoRaConfig>(app.mesh.config.lora);
     std::vector<Field> f;
     f.push_back(MZ_ENUM("Region", region, region_opts(),
                         "Required to transmit"));
-    f.push_back(MZ_BOOL("Use modem preset", use_preset, ""));
-    f.push_back(MZ_ENUM("Modem preset", modem_preset, preset_opts(),
-                        "Must match the rest of the mesh"));
+    // One row says what the radio runs on: a preset, or values of its own.
+    f.push_back(f_enum(
+        "Modem", [cfg]() { return static_cast<int64_t>(cfg->use_preset ? preset_info(cfg->modem_preset).value : kCustomModem); },
+        [cfg](int64_t v) {
+            if (v == kCustomModem) {
+                make_custom(*cfg);
+                return;
+            }
+            cfg->modem_preset = static_cast<meshtastic_Config_LoRaConfig_ModemPreset>(v);
+            cfg->use_preset   = true;
+        },
+        modem_opts(), "Must match the rest of the mesh"));
+    // A fixed frequency is set far down the page; say so where the modem is named.
+    f.back().note = [cfg]() { return std::string(cfg->override_frequency != 0 ? ", fixed freq" : ""); };
     f.push_back(MZ_INT("Hop limit", hop_limit, 1, 7, "hops", "Default 3"));
     f.push_back(MZ_BOOL("Transmit enabled", tx_enabled, ""));
     f.push_back(MZ_INT("Transmit power", tx_power, 0, 30, "dBm", "0 = region maximum"));
@@ -165,16 +261,68 @@ std::unique_ptr<Screen> page_lora(App& app)
     f.push_back(MZ_BOOL("Override duty cycle", override_duty_cycle, "May be illegal in your region"));
     f.push_back(MZ_BOOL("OK to MQTT", config_ok_to_mqtt, "Let gateways uplink your packets"));
     f.push_back(MZ_BOOL("Ignore MQTT", ignore_mqtt, "Drop packets that arrived via MQTT"));
-    f.push_back(f_header("Custom modem"));
-    f.push_back(MZ_INT("Bandwidth", bandwidth, 0, 1600, "kHz", "125, 250 or 500"));
-    f.push_back(MZ_INT("Spreading factor", spread_factor, 0, 12, "", "7-12"));
-    f.push_back(MZ_INT("Coding rate", coding_rate, 0, 8, "", "5-8 (4/5 to 4/8)"));
+    // These show what is in use, the preset's values included. Changing one
+    // makes the modem Custom, starting from what was there.
+    f.push_back(f_header("Modem values"));
+    f.push_back(f_int(
+        "Bandwidth", [cfg]() { return static_cast<int64_t>(cfg->use_preset ? preset_info(cfg->modem_preset).bw : cfg->bandwidth); },
+        [cfg](int64_t v) {
+            make_custom(*cfg);
+            cfg->bandwidth = static_cast<decltype(cfg->bandwidth)>(v);
+        },
+        7, 1600, "kHz", "Changing it makes the modem Custom. 62 = 62.5, 31 = 31.25"));
+    f.push_back(f_int(
+        "Spreading factor",
+        [cfg]() { return static_cast<int64_t>(cfg->use_preset ? preset_info(cfg->modem_preset).sf : cfg->spread_factor); },
+        [cfg](int64_t v) {
+            make_custom(*cfg);
+            cfg->spread_factor = static_cast<decltype(cfg->spread_factor)>(v);
+        },
+        5, 12, "", "Changing it makes the modem Custom. 5-12"));
+    f.push_back(f_int(
+        "Coding rate", [cfg]() { return static_cast<int64_t>(cfg->use_preset ? preset_info(cfg->modem_preset).cr : cfg->coding_rate); },
+        [cfg](int64_t v) {
+            make_custom(*cfg);
+            cfg->coding_rate = static_cast<decltype(cfg->coding_rate)>(v);
+        },
+        5, 8, "", "Changing it makes the modem Custom. 5-8 (4/5 to 4/8)"));
+    f.push_back(f_text(
+        "Fixed frequency (MHz)",
+        [cfg]() {
+            if (cfg->override_frequency == 0) return std::string();
+            char buf[24];
+            snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(cfg->override_frequency));
+            std::string text = buf;
+            while (text.back() == '0') text.pop_back();
+            if (text.back() == '.') text.pop_back();
+            return text;
+        },
+        [cfg](const std::string& s) {
+            const std::string text = trim(s);
+            if (text.empty()) {
+                cfg->override_frequency = 0;
+                return std::string();
+            }
+            char* end          = nullptr;
+            const double value = strtod(text.c_str(), &end);
+            if (end == text.c_str() || *end != 0 || value < 137 || value > 3000) return std::string("A frequency in MHz, e.g. 869.618");
+            double low = 0, high = 0;
+            if (region_band(cfg->region, low, high) && (value < low || value > high)) {
+                char range[64];
+                snprintf(range, sizeof(range), "%s allows %g to %g MHz", region_name(cfg->region).c_str(), low, high);
+                return std::string(range);
+            }
+            cfg->override_frequency = static_cast<float>(value);
+            return std::string();
+        },
+        12, "Empty = automatic. Must be legal in your region"));
+    f.back().empty_text = "automatic";
     return make_editor(
         app, "LoRa radio", std::move(f),
-        [&app, cfg]() {
+        [&app, cfg, before]() {
             meshtastic_Config c     = meshtastic_Config_init_zero;
             c.which_payload_variant = meshtastic_Config_lora_tag;
-            c.payload_variant.lora  = *cfg;
+            c.payload_variant.lora  = lora_cleaned(*before, *cfg);
             send_config(app.mesh, c);
         },
         kRestartNote);
@@ -526,18 +674,26 @@ std::string channel_url(const Mesh& mesh, int only_index)
            base64_encode(buffer, stream.bytes_written, true);
 }
 
-// Adds the channels of a shared URL to free slots. Returns a message for the user.
-std::string add_channels_from_url(Mesh& mesh, const std::string& url)
+// Reads the channels out of a shared URL. Returns an empty string, or what is wrong with it.
+std::string parse_channel_url(const std::string& url, meshtastic_ChannelSet& set)
 {
     const size_t hash = url.find('#');
     std::vector<uint8_t> bytes;
     if (hash == std::string::npos || !base64_decode(url.substr(hash + 1), bytes) || bytes.empty()) {
         return "Not a channel URL";
     }
-    meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+    set = meshtastic_ChannelSet_init_zero;
     if (!pb_decode_msg(meshtastic_ChannelSet_fields, bytes.data(), bytes.size(), set) || set.settings_count == 0) {
         return "Invalid channel URL";
     }
+    return {};
+}
+
+// Adds the channels of a shared URL to free slots. Returns a message for the user.
+std::string add_channels_from_url(Mesh& mesh, const std::string& url)
+{
+    meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+    if (const std::string error = parse_channel_url(url, set); !error.empty()) return error;
     int added = 0;
     mesh.begin_edit();
     for (pb_size_t s = 0; s < set.settings_count; ++s) {
@@ -567,6 +723,154 @@ std::string add_channels_from_url(Mesh& mesh, const std::string& url)
     mesh.commit_edit();
     if (added == 0) return "No channels added";
     return "Added " + std::to_string(added) + (added == 1 ? " channel" : " channels");
+}
+
+std::string preset_label(int preset)
+{
+    for (const PresetInfo& p : kPresets) {
+        if (p.value == preset) return p.name;
+    }
+    return "preset " + std::to_string(preset) + " (runs as LongFast)";
+}
+
+// The radio settings a shared link carries, in a few words.
+std::string lora_summary(const meshtastic_Config_LoRaConfig& l)
+{
+    std::string out = l.region == meshtastic_Config_LoRaConfig_RegionCode_UNSET ? "" : region_name(l.region) + ", ";
+    if (l.use_preset) {
+        out += preset_label(l.modem_preset);
+    } else {
+        char modem[48];
+        snprintf(modem, sizeof(modem), "SF%u / %s kHz / CR 4/%u", static_cast<unsigned>(l.spread_factor),
+                 l.bandwidth == 62 ? "62.5" : l.bandwidth == 31 ? "31.25" : std::to_string(l.bandwidth).c_str(),
+                 static_cast<unsigned>(l.coding_rate));
+        out += modem;
+    }
+    if (l.override_frequency != 0) {
+        char mhz[24];
+        snprintf(mhz, sizeof(mhz), ", %.3f MHz", static_cast<double>(l.override_frequency));
+        out += mhz;
+    } else if (l.channel_num != 0) {
+        out += ", slot " + std::to_string(l.channel_num);
+    }
+    return out;
+}
+
+// What of this node's radio settings a shared link would change: the part
+// that decides which other nodes can be heard.
+meshtastic_Config_LoRaConfig lora_with(const meshtastic_Config_LoRaConfig& mine, const meshtastic_Config_LoRaConfig& theirs)
+{
+    meshtastic_Config_LoRaConfig l = mine;
+    l.use_preset         = theirs.use_preset;
+    l.modem_preset       = theirs.modem_preset;
+    l.bandwidth          = theirs.bandwidth;
+    l.spread_factor      = theirs.spread_factor;
+    l.coding_rate        = theirs.coding_rate;
+    l.channel_num        = theirs.channel_num;
+    l.override_frequency = theirs.override_frequency;
+    l.frequency_offset   = theirs.frequency_offset;
+    if (theirs.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET) l.region = theirs.region;
+    if (theirs.hop_limit != 0) l.hop_limit = theirs.hop_limit;
+    return l;
+}
+
+bool lora_differs(const meshtastic_Config_LoRaConfig& a, const meshtastic_Config_LoRaConfig& b)
+{
+    if (a.region != b.region || a.use_preset != b.use_preset || a.channel_num != b.channel_num ||
+        a.override_frequency != b.override_frequency) {
+        return true;
+    }
+    if (a.use_preset) return a.modem_preset != b.modem_preset;
+    return a.bandwidth != b.bandwidth || a.spread_factor != b.spread_factor || a.coding_rate != b.coding_rate;
+}
+
+// Makes this node's channels and radio settings those of a shared link, the
+// way the phone apps do when a link is opened: its first channel becomes the
+// primary one and channels it does not name are switched off.
+std::string replace_from_url(Mesh& mesh, const std::string& url)
+{
+    meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+    if (const std::string error = parse_channel_url(url, set); !error.empty()) return error;
+    mesh.begin_edit();
+    for (int i = 0; i < kMaxChannels; ++i) {
+        meshtastic_Channel c = meshtastic_Channel_init_zero;
+        c.index              = static_cast<int8_t>(i);
+        if (i < static_cast<int>(set.settings_count)) {
+            c.has_settings = true;
+            c.settings     = set.settings[i];
+            c.role         = i == 0 ? meshtastic_Channel_Role_PRIMARY : meshtastic_Channel_Role_SECONDARY;
+        } else if (!mesh.channel_enabled(i)) {
+            continue;
+        }
+        mesh.set_channel(c);
+    }
+    if (set.has_lora_config) {
+        meshtastic_Config c     = meshtastic_Config_init_zero;
+        c.which_payload_variant = meshtastic_Config_lora_tag;
+        c.payload_variant.lora  = lora_with(mesh.config.lora, set.lora_config);
+        mesh.set_config(c);
+    }
+    mesh.commit_edit();
+    return "Switched. Radio restarting.";
+}
+
+// Says what a shared link contains and asks what to do with it.
+void offer_channels(App* a, const std::string& url)
+{
+    meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+    if (!parse_channel_url(url, set).empty()) return;
+    std::string names;
+    for (pb_size_t s = 0; s < set.settings_count; ++s) {
+        const meshtastic_ChannelSettings& c = set.settings[s];
+        names += (s ? "\n" : "") + std::string(c.name[0] ? c.name : "(default name)") + "  -  " + psk_summary(c);
+    }
+    const bool radio = set.has_lora_config && lora_differs(a->mesh.config.lora, lora_with(a->mesh.config.lora, set.lora_config));
+    const auto add   = [a, url]() {
+        const std::string result = add_channels_from_url(a->mesh, url);
+        a->toast(result, result.rfind("Added", 0) != 0);
+    };
+    if (!radio) {
+        const std::string question =
+            set.settings_count == 1 ? "Add this channel?" : "Add these " + std::to_string(set.settings_count) + " channels?";
+        a->push(make_confirm(*a, "Add channels", question + "\n\n" + ui::clean(names), {"Cancel", "Add"}, [add](int choice) {
+            if (choice == 1) add();
+        }));
+        return;
+    }
+    // The link is for a mesh that runs on other radio settings than this node.
+    // Kept short: three choices leave room for five lines.
+    std::string list = names;
+    for (char& ch : list) ch = ch == '\n' ? ',' : ch;
+    const std::string text = ui::clean(list, true) + "\nRadio: " + lora_summary(set.lora_config) +
+                             "\nSwitching replaces your channels and radio settings.";
+    a->push(make_confirm(*a, "Channels and radio", text, {"Cancel", "Add the channels only", "Switch to this setup"},
+                         [a, url, add](int choice) {
+                             if (choice == 1) add();
+                             if (choice == 2) a->toast(replace_from_url(a->mesh, url));
+                         }));
+}
+
+// Setups that local communities have agreed on, which are not among the
+// official presets. Each is the link its community hands out, so it can be
+// checked against the source and replaced when they change it.
+struct CommunitySetup {
+    const char* name;
+    const char* where;
+    const char* url;
+};
+const CommunitySetup kCommunitySetups[] = {
+    // https://meshtastic.es/docs/generador-configuracion/
+    {"SFNarrow", "Spain", "https://meshtastic.org/e/#ChESAQEaCFNGTmFycm93KAEwARIYCAAYPiAHKAU4A0ADSAFoAXWNZ1lEyAYB"},
+};
+
+void pick_community_setup(App* a)
+{
+    std::vector<std::string> labels;
+    for (const CommunitySetup& s : kCommunitySetups) labels.push_back(std::string(s.name) + " (" + s.where + ")");
+    a->push(make_picker(*a, LV_SYMBOL_LEFT " Community setups", labels, -1, [a](int choice) {
+        if (choice < 0 || static_cast<size_t>(choice) >= sizeof(kCommunitySetups) / sizeof(kCommunitySetups[0])) return;
+        offer_channels(a, kCommunitySetups[choice].url);
+    }));
 }
 
 std::unique_ptr<Screen> page_channel(App& app, int index)
@@ -701,6 +1005,14 @@ public:
         };
         action(LV_SYMBOL_IMAGE "  Share all (QR code)");
         action(LV_SYMBOL_PLUS "  Add from URL");
+        // Only on models that have a camera.
+        scan_index_ = -1;
+        if (Camera::available()) {
+            scan_index_ = static_cast<int>(items.size());
+            action(LV_SYMBOL_EYE_OPEN "  Scan QR code");
+        }
+        community_index_ = static_cast<int>(items.size());
+        action(LV_SYMBOL_LIST "  Community setups (experimental)");
         list_->set_items(items);
     }
 
@@ -713,21 +1025,49 @@ public:
             app.push(page_channel(app, i));
         } else if (i == kMaxChannels) {
             app.push(make_qr(app, "Share channels", channel_url(mesh, -1)));
+        } else if (i == scan_index_) {
+            scan();
+        } else if (i == community_index_) {
+            pick_community_setup(&app);
         } else {
             App* a = &app;
             app.push(make_input(app, "Add channels", "", 400,
                                 "Enter a meshtastic.org/e/# link",
                                 [a](const std::string& text) {
-                                    const std::string result = add_channels_from_url(a->mesh, trim(text));
-                                    a->toast(result, result.rfind("Added", 0) != 0);
-                                    return result.rfind("Added", 0) == 0;
+                                    meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+                                    const std::string error   = parse_channel_url(trim(text), set);
+                                    if (!error.empty()) {
+                                        a->toast(error, true);
+                                        return false;
+                                    }
+                                    a->pop();  // this page; the question takes its place
+                                    offer_channels(a, trim(text));
+                                    return false;
                                 }));
         }
         return true;
     }
 
 private:
+    // Opens the camera, and asks before adding what a channel code contains.
+    void scan()
+    {
+        App* a = &app;
+        app.push(make_scanner(app, LV_SYMBOL_LEFT " Scan channel code", [a](const std::string& text) {
+            meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+            if (!parse_channel_url(text, set).empty()) {
+                a->toast("Not a channel code", true);
+                return false;
+            }
+            a->pop();  // the camera view
+            offer_channels(a, text);
+            return true;
+        }));
+    }
+
     std::unique_ptr<ui::ListView> list_;
+    int scan_index_      = -1;
+    int community_index_ = -1;
 };
 
 // ---------------------------------------------------------- region picker
@@ -782,6 +1122,7 @@ public:
         c.payload_variant.lora  = mesh.config.lora;
         c.payload_variant.lora.region     = static_cast<Region>(r.value);
         c.payload_variant.lora.tx_enabled = true;
+        c.payload_variant.lora            = lora_cleaned(mesh.config.lora, c.payload_variant.lora);
         send_config(mesh, c);
         app.toast(std::string("Region set to ") + r.name + ". Radio restarting.");
         app.pop();
@@ -799,7 +1140,7 @@ class SetupScreen : public Screen {
 public:
     explicit SetupScreen(App& a) : Screen(a) { list_ = std::make_unique<ui::ListView>(root, 0, 0, kContentW, kContentH); }
     int tab() const override { return kTabSetup; }
-    std::string hint() const override { return "Enter open   Tab next page   ? help   Esc exit"; }
+    std::string hint() const override { return "Enter open   Tab next page   ? help   Hold Esc exit"; }
 
     void refresh() override
     {
@@ -833,7 +1174,8 @@ public:
 
         header("Radio");
         entry("Region", region_name(mesh.config.lora.region), [a]() { a->push(make_region_picker(*a, false)); });
-        entry("LoRa radio", mesh.preset_name(), open(page_lora));
+        entry("LoRa radio", mesh.preset_name() + (mesh.config.lora.override_frequency != 0 ? ", fixed freq" : ""),
+              open(page_lora));
         int enabled = 0;
         for (int i = 0; i < kMaxChannels; ++i) enabled += mesh.channel_enabled(i) ? 1 : 0;
         entry("Channels", std::to_string(enabled) + " of 8", [a]() { a->push(make_channels(*a)); });
@@ -901,6 +1243,23 @@ public:
                                      }
                                  }));
         });
+        const std::string newer = update::available();
+        entry("Updates",
+              !newer.empty() ? newer + " available" : !update::enabled() ? "off" : update::checked() ? "up to date" : "",
+              [a, newer]() {
+                  const bool on    = update::enabled();
+                  std::string text = "This is MeshZero " MESHZERO_VERSION ".";
+                  if (!newer.empty()) {
+                      text += " Version " + newer + " is available: update from the store, or get the package from "
+                              "github.com/s0liton/MeshZero/releases.";
+                  }
+                  if (!on) text += "\n\nUpdate checks are turned off.";
+                  a->push(make_confirm(*a, "Updates", text,
+                                       {"Back", on ? "Turn off update checks" : "Turn on update checks"},
+                                       [on](int c) {
+                                           if (c == 1) update::set_enabled(!on);
+                                       }));
+              });
         entry("Help", "", [a]() { a->push(make_help(*a)); });
         list_->set_items(items);
     }

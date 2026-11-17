@@ -95,6 +95,7 @@ private:
     std::vector<std::function<void()>> pending_;
     Screen* shown_      = nullptr;
     uint64_t last_tick_ = 0;
+    uint64_t esc_held_ms_ = 0;  // since when Esc is held on a home page, 0 if it is not
     bool quit_          = false;
     bool region_prompted_ = false;
 };
@@ -126,5 +127,9 @@ std::unique_ptr<Screen> make_input(App& app, const std::string& title, const std
                                    const std::string& help, std::function<bool(const std::string&)> on_accept,
                                    const char* accept_chars = nullptr);
 std::unique_ptr<Screen> make_qr(App& app, const std::string& title, const std::string& data);
+// Camera view that looks for a QR code (scan.cpp). on_code gets the text of
+// each code seen and returns true once it has taken over, false to keep looking.
+std::unique_ptr<Screen> make_scanner(App& app, const std::string& title,
+                                     std::function<bool(const std::string&)> on_code);
 
 }  // namespace mz

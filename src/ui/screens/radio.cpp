@@ -267,7 +267,7 @@ const char* const kHelp =
     "KEYS\n"
     "Arrows: move (hold Fn only while typing)\n"
     "Enter: open, edit, send\n"
-    "Esc: back, exit\n"
+    "Esc: back. Hold it for 2 seconds to exit\n"
     "Tab: next page\n"
     "Settings: Esc asks to save\n\n"
     "MESSAGES\n"

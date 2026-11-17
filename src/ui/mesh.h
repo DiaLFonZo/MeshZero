@@ -122,11 +122,16 @@ public:
     void set_active_chat(const ChatKey* key);
     void mark_read(const ChatKey& key);
     bool send_text(const ChatKey& key, const std::string& text, uint32_t reply_id = 0);
+    // Reacts to the message with this packet id with an emoji.
+    bool send_tapback(const ChatKey& key, uint32_t target_id, const std::string& emoji);
 
     // ---- requests ----------------------------------------------------
     void traceroute(uint32_t dest);
     void request_position(uint32_t dest);
     void request_nodeinfo(uint32_t dest);
+    bool has_key(uint32_t num) const;
+    bool awaiting_key(uint32_t num) const;
+    void ensure_key(uint32_t dest);
     void request_telemetry(uint32_t dest);
 
     // ---- administration (local node) ---------------------------------
@@ -165,6 +170,7 @@ private:
     void send_control(const std::string& request);
     uint32_t send_packet(uint32_t to, uint8_t channel, meshtastic_PortNum port, const uint8_t* payload, size_t len,
                          bool want_ack, bool want_response);
+    bool send_message(const ChatKey& key, const std::string& text, uint32_t reply_id, bool tapback);
     void on_frame(const std::string& payload);
     void on_packet(const meshtastic_MeshPacket& p);
     void on_text(const meshtastic_MeshPacket& p);
@@ -198,6 +204,11 @@ private:
     ChatKey active_;
     std::map<uint32_t, ChatKey> pending_acks_;  // packet id -> conversation
     std::map<uint32_t, uint32_t> trace_ids_;    // request id -> destination
+    struct KeyAsk {
+        uint64_t at = 0;  // when it was last asked for
+        int tries   = 0;
+    };
+    std::map<uint32_t, KeyAsk> key_asks_;  // node -> requests for its public key
 };
 
 const char* portnum_name(int portnum);

@@ -146,13 +146,14 @@ public:
                     // Long option labels carry an explanation after two spaces.
                     const size_t cut = it.right.find("  ");
                     if (cut != std::string::npos) it.right = it.right.substr(0, cut);
+                    if (f.note) it.right += f.note();
                     it.has_right_color = true;
                     it.right_color     = ui::c_text();
                     break;
                 }
                 case Field::Text: {
                     const std::string v = f.get_text();
-                    it.right            = v.empty() ? "(empty)" : f.secret ? "********" : ui::clean(v, true);
+                    it.right            = v.empty() ? (f.empty_text.empty() ? "(empty)" : f.empty_text) : f.secret ? "********" : ui::clean(v, true);
                     if (it.right.size() > 26) it.right = utf8_cut(it.right, 24) + "..";
                     it.has_right_color = true;
                     it.right_color     = v.empty() ? ui::c_dim() : ui::c_text();

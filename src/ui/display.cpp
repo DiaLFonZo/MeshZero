@@ -137,6 +137,11 @@ int sdl_event_watch(void*, SDL_Event* e)
                 g_backend_keys.push_back(key);
             }
         }
+    } else if (e->type == SDL_KEYUP && e->key.keysym.sym == SDLK_ESCAPE) {
+        Key key;
+        key.k       = K::Esc;
+        key.release = true;
+        g_backend_keys.push_back(key);
     } else if (e->type == SDL_KEYDOWN) {
         Key key;
         key.repeat = e->key.repeat != 0;

@@ -225,6 +225,7 @@ private:
     uint64_t radio_backoff_ms_ = 0;
     uint64_t radio_idle_ms_    = 0;  // since when nobody has needed it
     int cap_misses_            = 0;
+    bool legacy_cap_           = false; // the older model of the cap, no expander
     std::string radio_status_;
     int upstream_fd_ = -1;
     bool upstream_connecting_ = false;
@@ -588,8 +589,11 @@ void Proxy::serve_config(Client& c)
     const bool send_config = c.nonce != kNonceNodesOnly;
     const bool send_nodes  = c.nonce != kNonceConfigOnly;
 
-    // Same order the firmware uses, so clients see nothing unusual.
-    if (!cache_.my_info.empty()) client_send(c, cache_.my_info);
+    // Same order the firmware uses, so clients see nothing unusual. A request
+    // for the nodes alone gets no my_info: the phone apps ask for the
+    // configuration and the nodes in two rounds, and take a my_info in the
+    // second one as the start of a new first round.
+    if (send_config && !cache_.my_info.empty()) client_send(c, cache_.my_info);
     if (send_config && !cache_.deviceui.empty()) client_send(c, cache_.deviceui);
     const auto own = cache_.nodes.find(cache_.my_num);
     if (own != cache_.nodes.end()) client_send(c, own->second);
@@ -663,7 +667,10 @@ void Proxy::on_to_radio(Client& c, const std::string& payload)
             c.closing = true;
             return;
         case meshtastic_ToRadio_heartbeat_tag:
-            return;  // the proxy keeps its own link to the radio alive
+            // The radio answers a heartbeat with its queue status, which some
+            // clients use to tell that the link is alive.
+            upstream_send(payload);
+            return;
         case meshtastic_ToRadio_packet_tag: {
             meshtastic_MeshPacket& p = msg.packet;
             if (p.which_payload_variant != meshtastic_MeshPacket_decoded_tag) {
@@ -739,17 +746,31 @@ void Proxy::watch_radio(bool asked)
             if (now - radio_idle_ms_ > 2000) stop_radio("not needed");
         } else {
             radio_idle_ms_ = 0;
-            // One missed answer can be a bus glitch; three in a row means the cap is gone.
-            cap_misses_ = hw_cap_probe(false) == Cap::Absent ? cap_misses_ + 1 : 0;
-            if (cap_misses_ >= 3) stop_radio("LoRa cap removed");
+            const Cap cap = hw_cap_probe(false);
+            if (legacy_cap_) {
+                // The expander answers after all: this is the newer cap, taken
+                // for the older one because it was slow to wake. Its antenna
+                // switch is still off.
+                if (cap == Cap::Present) {
+                    logf("IO expander found, switching the antenna on");
+                    legacy_cap_ = false;
+                    hw_power(true);
+                }
+            } else {
+                // One missed answer can be a bus glitch; three in a row means the cap is gone.
+                cap_misses_ = cap == Cap::Absent ? cap_misses_ + 1 : 0;
+                if (cap_misses_ >= 3) stop_radio("LoRa cap removed");
+            }
         }
     } else if (!wanted) {
         status = "stopped";
     } else {
         if (asked) radio_retry_ms_ = 0;  // somebody just opened the app: try now
-        if (hw_cap_probe(false) == Cap::Absent) {
+        const Cap cap = hw_cap_probe(false, false);
+        if (cap == Cap::Absent) {
             status = "nocap";
         } else if (now >= radio_retry_ms_) {
+            legacy_cap_ = cap == Cap::Legacy;
             start_radio();
         }
     }
@@ -766,7 +787,7 @@ void Proxy::watch_radio(bool asked)
 
 void Proxy::start_radio()
 {
-    hw_power(true);
+    hw_power(true, !legacy_cap_);
     const pid_t pid = fork();
     if (pid < 0) {
         logf("cannot start the radio daemon: %s", strerror(errno));
@@ -1109,7 +1130,7 @@ int main(int argc, char** argv)
             if (action == "on") return hw_power(true) ? 0 : 1;
             if (action == "off") return hw_power(false) ? 0 : 1;
             if (action == "present") {
-                const Cap cap = hw_cap_probe(true);
+                const Cap cap = hw_cap_check(radio_port);
                 printf("LoRa cap: %s\n", hw_cap_name(cap));
                 return cap == Cap::Absent ? 1 : 0;
             }

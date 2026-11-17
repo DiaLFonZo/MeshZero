@@ -56,6 +56,7 @@ class Radio:
         self.owner_long = "MeshZero Dev"
         self.owner_short = "MZ01"
         self.packet_id = random.randrange(1, 1 << 30)
+        self.nodeinfo_ignored = 0
 
         self.lora = config_pb2.Config.LoRaConfig(
             use_preset=True, hop_limit=3, tx_enabled=True, tx_power=0,
@@ -170,17 +171,26 @@ class Radio:
         self.send(mesh_pb2.FromRadio(config_complete_id=nonce))
 
     # ----------------------------------------------------------- packets
-    def deliver(self, sender, to, port, payload, channel=0, request_id=0, hops=0, snr=5.0, delay=0.0, pki=False):
+    def deliver(self, sender, to, port, payload, channel=0, request_id=0, hops=0, snr=5.0, delay=0.0, pki=False,
+                tapback_to=0, reply_to=0):
+        packet_id = self.next_id()
+
         def run():
-            packet = mesh_pb2.MeshPacket(id=self.next_id(), to=to, channel=channel, rx_time=int(time.time()),
+            packet = mesh_pb2.MeshPacket(id=packet_id, to=to, channel=channel, rx_time=int(time.time()),
                                          rx_snr=snr, rx_rssi=-70 - hops * 12, hop_start=3, hop_limit=3 - hops,
                                          pki_encrypted=pki)
             setattr(packet, "from", sender)
             packet.decoded.portnum = port
             packet.decoded.payload = payload
             packet.decoded.request_id = request_id
+            if tapback_to:
+                packet.decoded.emoji = 1
+                packet.decoded.reply_id = tapback_to
+            if reply_to:
+                packet.decoded.reply_id = reply_to
             self.send(mesh_pb2.FromRadio(packet=packet))
         threading.Timer(delay, run).start()
+        return packet_id
 
     def ack(self, sender, request_id, error=mesh_pb2.Routing.NONE, delay=0.4):
         self.deliver(sender, MY_NUM, portnums_pb2.ROUTING_APP,
@@ -194,15 +204,23 @@ class Radio:
             self.on_admin(packet)
             return
         if port == portnums_pb2.TEXT_MESSAGE_APP:
+            tapback = packet.decoded.emoji != 0 and packet.decoded.reply_id != 0
+            if tapback:
+                print("tapback: %s on %d" % (packet.decoded.payload.decode(), packet.decoded.reply_id), flush=True)
             if dest == BROADCAST:
                 self.ack(MY_NUM, packet.id, delay=0.8)  # relayed by a neighbour: implicit ack
+                if not tapback and not self.args.quiet_mesh:
+                    # Somebody likes what was said.
+                    self.deliver(NODES[0][0], BROADCAST, port, "\U0001F44D".encode(), channel=packet.channel,
+                                 delay=1.2, tapback_to=packet.id)
             elif dest in known:
                 if known[dest][1] == "F0X":
                     self.ack(MY_NUM, packet.id, error=mesh_pb2.Routing.MAX_RETRANSMIT, delay=3.0)
                 else:
                     self.ack(dest, packet.id, delay=1.0)
-                    self.deliver(dest, MY_NUM, port, random.choice(REPLIES).encode(), hops=known[dest][5],
-                                 delay=3.0, pki=True)
+                    if not tapback:
+                        self.deliver(dest, MY_NUM, port, random.choice(REPLIES).encode(), hops=known[dest][5],
+                                     delay=3.0, pki=True)
             else:
                 self.ack(MY_NUM, packet.id, error=mesh_pb2.Routing.NO_ROUTE, delay=1.0)
         elif port == portnums_pb2.TRACEROUTE_APP and dest in known:
@@ -214,6 +232,17 @@ class Radio:
             route.route_back.extend(list(reversed(relays)))
             route.snr_back.extend([18, -9, 25][:hops + 1])
             self.deliver(dest, MY_NUM, port, route.SerializeToString(), request_id=packet.id, hops=hops, delay=2.0)
+        elif port == portnums_pb2.NODEINFO_APP and dest in known:
+            # A node answers with its user record, public key included, even
+            # when the radio's own node list had no key for it yet.
+            num, short, long_name, hw = known[dest][:4]
+            print("nodeinfo request: %s want_response=%s" % (short, packet.decoded.want_response), flush=True)
+            if self.nodeinfo_ignored < self.args.ignore_nodeinfo:
+                self.nodeinfo_ignored += 1  # as a node does when it sent its info recently
+            elif packet.decoded.want_response:
+                self.ack(dest, packet.id, delay=0.5)
+                self.deliver(dest, MY_NUM, port, self.user(num, short, long_name, hw).SerializeToString(),
+                             request_id=packet.id, hops=known[dest][5], delay=1.5)
         elif port == portnums_pb2.POSITION_APP and dest in known:
             for node in self.other_nodes():
                 if node.num == dest:
@@ -245,13 +274,22 @@ class Radio:
     # ---------------------------------------------------------- activity
     def background(self):
         time.sleep(self.args.chatter_delay)
+        sent = []
         for sender, text in CHATTER:
             if self.args.quiet_mesh:
                 return
             hops = {n[0]: n[5] for n in NODES}[sender]
-            self.deliver(sender, BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, text.encode(), hops=hops,
-                         snr=random.choice([6.5, -3.25, 9.0]))
+            sent.append(self.deliver(sender, BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, text.encode(), hops=hops,
+                                     snr=random.choice([6.5, -3.25, 9.0])))
             time.sleep(self.args.chatter_gap)
+        # Reactions to what was said: two nodes agree on one message, one adds a heart to another.
+        for sender, target, emoji in [(0xA1B2C302, sent[2], "\U0001F44D"), (0xA1B2C304, sent[2], "\U0001F44D"),
+                                      (0xA1B2C307, sent[4], "\u2764\ufe0f")]:
+            self.deliver(sender, BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, emoji.encode(), tapback_to=target)
+            time.sleep(0.1)
+        # ... and an answer to one of them.
+        self.deliver(0xA1B2C304, BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, b"Nice range, what antenna?", hops=1,
+                     reply_to=sent[4])
         stats = telemetry_pb2.Telemetry(time=int(time.time()))
         stats.local_stats.num_packets_rx = 412
         stats.local_stats.num_packets_rx_bad = 9
@@ -303,6 +341,8 @@ class Radio:
                         self.send_config(msg.want_config_id)
                     elif which == "packet":
                         self.on_packet(msg.packet)
+                    elif which == "heartbeat":
+                        self.send(mesh_pb2.FromRadio(queueStatus=mesh_pb2.QueueStatus(free=16, maxlen=16)))
             with self.lock:
                 self.conn = None
             conn.close()
@@ -313,6 +353,8 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=4404)
     parser.add_argument("--quiet-mesh", action="store_true", help="do not generate channel chatter")
     parser.add_argument("--no-region", action="store_true", help="start with the LoRa region unset")
+    parser.add_argument("--ignore-nodeinfo", type=int, default=0, metavar="N",
+                        help="leave the first N node info requests unanswered")
     parser.add_argument("--chatter-delay", type=float, default=2.0)
     parser.add_argument("--chatter-gap", type=float, default=0.7)
     Radio(parser.parse_args()).serve()

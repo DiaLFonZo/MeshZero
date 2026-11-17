@@ -22,7 +22,10 @@ public:
         lv_obj_set_pos(l, 6, 3);
         lv_obj_set_width(l, kContentW - 14);
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-        if (link.empty()) return;
+        if (link.empty()) {
+            ui::add_scroll_hints(root);
+            return;
+        }
 
         lv_obj_update_layout(l);
         int y = lv_obj_get_y(l) + lv_obj_get_height(l) + 4;
@@ -55,6 +58,7 @@ public:
         lv_obj_remove_style_all(end);
         lv_obj_set_size(end, 1, 4);
         lv_obj_set_pos(end, 0, y + (ok ? size + 6 : ui::kRowH));
+        ui::add_scroll_hints(root);
     }
     std::string title() const override { return title_; }
     std::string hint() const override { return "Up/Down scroll   Esc back"; }

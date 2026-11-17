@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.2.0
+What was meant to be a couple of bug fixes became an entire minor release with new features and abilities. All thanks to getting sick as a dog and having a day in bed.
+
+**Added**
+
+- **Tapbacks:** React to messages with emojis.
+- **Replies:** Reply to specific messages.
+- **Emoji typing:** Click "tab" during a chat to open the selector.
+- **Message menu:** Click Up (Fn + F) to enter select messages and select one to see actions.
+- **Message details:** Sender, time, hops, signal, encryption, delivery status, reactions, etc.
+- **QR scanning:** Add channels by scanning a code with the camera. Compatible with most config generators, the official app, etc.
+- **Automatic key requests:** Direct messages ask the other node for its public key, backing off when unanswered.
+- **Radio settings from links:** A channel link or QR code that carries radio settings can be applied as a whole.
+- **Community setups (experimental):** Allows meshtastic communities to submit their
+custom radio/channel configurations to the app so you can have a one click setup experience.
+- **Update check:** Looks for a newer release at launch.
+- **Scroll arrows:** Lists and text pages show when there is more above or below.
+
+**Fixed**
+- **Older cap support:** Properly detects the older model of LoRa cap. (issue #2)
+- **Android app could not connect** Repeatedly connecting and failing during node retrieval (issue #3).
+- **iOS app dropped the connection** Would disconnect every so many seconds due to
+missing heartbeat (issue #1)
+
+**Changed**
+
+- **Exit:** hold Esc for 2 seconds on the main pages instead of a single press.
+- **LoRa page:** one Modem row replaces the "Use modem preset" switch; the modem values always show what is in use, and editing one makes the modem Custom.
+- **Tab in a direct chat** opens the emoji grid; the node's details moved to the message menu.
+- **Enter on a picked message** opens the menu, so a tapback is one more key press than when tapbacks were first built.
+- **Scanner memory:** the QR reader gives its work buffers back when you leave it.
+
 ## 0.1.0
 
 First release.

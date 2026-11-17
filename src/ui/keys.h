@@ -15,6 +15,7 @@ struct Key {
     uint32_t ch = 0;  // Unicode code point when k == Char
     bool ctrl   = false;
     bool repeat = false;
+    bool release = false;  // the key was let go; only reported for Esc, which is held to exit
 
     bool is_char(char c) const { return k == K::Char && !ctrl && ch == static_cast<uint32_t>(c); }
 };

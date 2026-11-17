@@ -94,6 +94,71 @@ void set_bg(lv_obj_t* obj, lv_color_t color)
     lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
 }
 
+// ------------------------------------------------------------ scroll hints
+
+namespace {
+
+// Tell the two arrows apart from the area's other children.
+char g_hint_up, g_hint_down;
+
+void on_scrolled(lv_event_t* e)
+{
+    update_scroll_hints(static_cast<lv_obj_t*>(lv_event_get_target(e)));
+}
+
+lv_obj_t* make_hint(lv_obj_t* parent, const char* symbol, void* tag, lv_align_t where, int dy)
+{
+    lv_obj_t* l = label(parent, symbol, c_accent(), font_small());
+    lv_obj_set_user_data(l, tag);
+    // Stays put while the rest scrolls, and does not count as content.
+    lv_obj_add_flag(l, LV_OBJ_FLAG_FLOATING);
+    lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_pad_hor(l, 3, 0);
+    lv_obj_set_style_radius(l, 6, 0);
+    set_bg(l, c_bar());
+    lv_obj_align(l, where, 0, dy);
+    return l;
+}
+
+}  // namespace
+
+void add_scroll_hints(lv_obj_t* obj)
+{
+    bool watched = false;
+    for (uint32_t i = 0; i < lv_obj_get_event_count(obj); ++i) {
+        watched = watched || lv_event_dsc_get_cb(lv_obj_get_event_dsc(obj, i)) == on_scrolled;
+    }
+    if (!watched) lv_obj_add_event_cb(obj, on_scrolled, LV_EVENT_SCROLL, nullptr);
+    make_hint(obj, LV_SYMBOL_UP, &g_hint_up, LV_ALIGN_TOP_MID, 0);
+    make_hint(obj, LV_SYMBOL_DOWN, &g_hint_down, LV_ALIGN_BOTTOM_MID, 0);
+    update_scroll_hints(obj);
+}
+
+void update_scroll_hints(lv_obj_t* obj)
+{
+    lv_obj_update_layout(obj);
+    lv_obj_t* up   = nullptr;
+    lv_obj_t* down = nullptr;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(obj); ++i) {
+        lv_obj_t* child = lv_obj_get_child(obj, static_cast<int32_t>(i));
+        if (lv_obj_get_user_data(child) == &g_hint_up) up = child;
+        if (lv_obj_get_user_data(child) == &g_hint_down) down = child;
+    }
+    const auto show = [](lv_obj_t* hint, bool on) {
+        if (!hint) return;
+        if (on == lv_obj_has_flag(hint, LV_OBJ_FLAG_HIDDEN)) {
+            if (on) {
+                lv_obj_remove_flag(hint, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(hint, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+        if (on) lv_obj_move_foreground(hint);
+    };
+    show(up, lv_obj_get_scroll_top(obj) > 2);
+    show(down, lv_obj_get_scroll_bottom(obj) > 2);
+}
+
 // ------------------------------------------------------------- text cleanup
 
 namespace {
@@ -241,6 +306,7 @@ void ListView::rebuild()
         r.right = label(r.row, "", c_dim());
         lv_obj_align(r.right, LV_ALIGN_TOP_RIGHT, -5, 1);
     }
+    add_scroll_hints(cont_);
 }
 
 void ListView::apply(size_t i)
@@ -289,6 +355,7 @@ void ListView::set_items(const std::vector<ListItem>& items)
     }
     for (size_t i = 0; i < items_.size(); ++i) apply(i);
     if (resize) select(selected_);
+    update_scroll_hints(cont_);
 }
 
 void ListView::select(int index)
@@ -307,6 +374,7 @@ void ListView::select(int index)
     const int top = selected_ > 0 && items_[static_cast<size_t>(selected_ - 1)].header ? selected_ - 1 : selected_;
     lv_obj_scroll_to_view(rows_[static_cast<size_t>(top)].row, LV_ANIM_OFF);
     lv_obj_scroll_to_view(rows_[static_cast<size_t>(selected_)].row, LV_ANIM_OFF);
+    update_scroll_hints(cont_);
 }
 
 void ListView::move(int delta)
@@ -399,6 +467,13 @@ void TextField::set_text(const std::string& text)
 {
     lv_textarea_set_text(ta_, text.c_str());
     lv_textarea_set_cursor_pos(ta_, LV_TEXTAREA_CURSOR_LAST);
+}
+
+bool TextField::insert(const std::string& text)
+{
+    if (strlen(lv_textarea_get_text(ta_)) + text.size() > max_bytes_) return false;
+    lv_textarea_add_text(ta_, text.c_str());
+    return true;
 }
 
 bool TextField::handle_key(const Key& key)

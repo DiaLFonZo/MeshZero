@@ -40,6 +40,21 @@ std::string unescape_field(const std::string& text);
 std::vector<std::string> split(const std::string& text, char sep);
 std::string trim(const std::string& text);
 
+// Compares dotted version numbers such as "0.1.10" and "0.2": below zero,
+// zero or above zero as a is older than, the same as or newer than b. A part
+// that is missing counts as 0; an empty string is older than everything.
+int version_compare(const std::string& a, const std::string& b);
+
+// The version named by "tag_name" in a release description as GitHub's
+// releases API gives it ("v0.1.2" becomes "0.1.2"). Empty when there is none
+// or it is not made of digits and dots.
+std::string release_version(const std::string& json);
+
+// Where this user's own state is kept (what has been read, and the like).
+std::string user_state_dir();
+// Creates a directory and the ones above it.
+void make_dirs(const std::string& path);
+
 // Truncates to at most max_bytes without cutting a UTF-8 sequence in half.
 std::string utf8_truncate(const std::string& text, size_t max_bytes);
 

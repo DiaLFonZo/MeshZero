@@ -16,6 +16,9 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <linux/spi/spidev.h>
+
+#include "common/history.h"
 
 namespace mz {
 namespace {
@@ -44,6 +47,11 @@ std::string rail_path()
 std::string i2c_path()
 {
     return env_or("MESHZERO_I2C_DEV", "/dev/i2c-1");
+}
+
+std::string spi_path()
+{
+    return env_or("MESHZERO_SPI_DEV", "/dev/spidev0.1");
 }
 
 int expander_addr()
@@ -144,6 +152,29 @@ bool antenna_switch(bool on)
     return ok;
 }
 
+bool radio_answers()
+{
+    const int fd = open(spi_path().c_str(), O_RDWR | O_CLOEXEC);
+    if (fd < 0) return false;
+    uint8_t tx[20] = {0x1D, 0x03, 0x20, 0x00};// REGISTERS
+    uint8_t rx[20] = {};
+    spi_ioc_transfer xfer{};
+    xfer.tx_buf = reinterpret_cast<uintptr_t>(tx);
+    xfer.rx_buf = reinterpret_cast<uintptr_t>(rx);
+    xfer.len = sizeof(tx);
+    xfer.speed_hz = 1000000;
+    xfer.bits_per_word = 8;
+    bool found = false;
+
+    for (int attempt = 0; attempt < 2 && !found; ++attempt) {
+        if (ioctl(fd, SPI_IOC_MESSAGE(1), &xfer) < 0) break;
+        found = memcmp(rx + 4, "SX126", 5) == 0;
+        if (!found) usleep(5000);
+    }
+    close(fd);
+    return found;
+}
+
 bool tcp_port_open(int port)
 {
     const int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -165,7 +196,7 @@ bool exists(const std::string& path)
 
 }  // namespace
 
-Cap hw_cap_probe(bool patient)
+Cap hw_cap_probe(bool patient, bool radio_running)
 {
     if (env_or("MESHZERO_CAP_DETECT", "1") == "0") return Cap::Unknown;
     // The expander is powered from the 5 V rail, so that has to be on first.
@@ -187,15 +218,33 @@ Cap hw_cap_probe(bool patient)
         if (ex.read_reg(kRegDeviceId, id)) return Cap::Present;
         usleep(patient ? 50000 : 5000);
     }
+    // No expander present, so likely the old cap or nothing plugged in
+    if (!radio_running && radio_answers()) return Cap::Legacy;
     return rail_ok ? Cap::Absent : Cap::Unknown;
+}
+
+Cap hw_cap_check(int radio_port)
+{
+    const Cap cap = hw_cap_probe(true);
+    if (cap != Cap::Absent) return cap;
+    // No expander. A running radio daemon means the older cap is there.
+    if (tcp_port_open(radio_port)) return Cap::Legacy;
+    std::string status;
+    read_file(history_dir() + "/radio-status", status);
+    for (int i = 0; i < 10 && status == "starting"; ++i) {
+        usleep(500000);
+        if (tcp_port_open(radio_port)) return Cap::Legacy;
+    }
+    return radio_answers() ? Cap::Legacy : Cap::Absent;
 }
 
 const char* hw_cap_name(Cap cap)
 {
+    if (cap == Cap::Legacy) return "attached (older model)";
     return cap == Cap::Present ? "attached" : cap == Cap::Absent ? "not attached" : "unknown";
 }
 
-bool hw_power(bool on)
+bool hw_power(bool on, bool has_switch)
 {
     const std::string rail = rail_path();
     if (!on) {
@@ -221,7 +270,7 @@ bool hw_power(bool on)
     }
     // Without the switch the radio still starts, only with a poor RF path, so
     // let the radio daemon decide whether a cap is really there.
-    if (!antenna_switch(true)) {
+    if (has_switch && !antenna_switch(true)) {
         fprintf(stderr, "meshzero-hw: continuing without the antenna switch; expect weak signals\n");
     }
     return true;
@@ -243,8 +292,8 @@ int hw_status()
     }
     uint8_t id = 0, dir = 0, out = 0, hiz = 0, pull_en = 0, pull_sel = 0, in = 0;
     if (!ex.read_reg(kRegDeviceId, id)) {
-        printf("IO expander  : no response at 0x%02x\n", expander_addr());
-        return 1;
+        printf("IO expander  : no response at 0x%02x (older cap doesn't have an expander)\n", expander_addr());
+        return 2;
     }
     ex.read_reg(kRegDirection, dir);
     ex.read_reg(kRegOutput, out);
@@ -284,8 +333,15 @@ int hw_doctor(int radio_port, int api_port)
     device(env_or("MESHZERO_GPS_DEV", "/dev/ttyS0"), R_OK | W_OK, "GNSS serial port",
            "enable the UART (enable_uart=1) and remove the serial console", "dialout");
     device(rail_path(), W_OK, "5V rail control for the cap", "the ext_5v_out control is not present on this image", "gpio");
-    check(hw_status() == 0, "LoRa cap antenna switch",
-          "power off, attach the cap, power on");
+    const int cap = hw_status();
+    if (cap == 2) {
+        // No expander. Expected for the older cap model, so look for the radio instead.
+        const bool found = hw_cap_check(radio_port) == Cap::Legacy;
+        check(found, found ? "LoRa cap (older model, No RF Switch)" : "LoRa cap",
+            "power off, attach the cap, and power on");
+    } else {
+        check(cap == 0, "LoRa cap antenna switch", "power off, attach the cap, and power on");
+    }
     check(tcp_port_open(radio_port), "Radio daemon API (local)",
           "see 'journalctl -u meshzero -n 40'");
     check(tcp_port_open(api_port), "MeshZero API for clients", "see 'journalctl -u meshzero -n 40'");
