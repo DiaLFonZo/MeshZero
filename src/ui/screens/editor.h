@@ -33,6 +33,10 @@ struct Field {
     int64_t max    = 0;
     size_t max_len = 0;
     bool secret    = false;
+    // Optional: something to add after the value shown (Enum), and what an
+    // empty Text field reads as instead of "(empty)".
+    std::function<std::string()> note;
+    std::string empty_text;
     // Action rows normally leave the page clean; set when the action edits the working copy.
     bool marks_dirty = false;
 };

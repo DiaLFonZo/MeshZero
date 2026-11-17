@@ -133,7 +133,7 @@ std::vector<Opt> modem_opts()
 {
     std::vector<Opt> opts;
     for (const PresetInfo& p : kPresets) {
-        opts.push_back({p.value, std::string(p.name) + (p.value == kPresets[0].value ? " (default)" : "")});
+        opts.push_back({p.value, std::string(p.name) + (p.value == kPresets[0].value ? "  (default)" : "")});
     }
     opts.push_back({kCustomModem, "Custom"});
     return opts;
@@ -251,6 +251,8 @@ std::unique_ptr<Screen> page_lora(App& app)
             cfg->use_preset   = true;
         },
         modem_opts(), "Must match the rest of the mesh"));
+    // A fixed frequency is set far down the page; say so where the modem is named.
+    f.back().note = [cfg]() { return std::string(cfg->override_frequency != 0 ? ", fixed freq" : ""); };
     f.push_back(MZ_INT("Hop limit", hop_limit, 1, 7, "hops", "Default 3"));
     f.push_back(MZ_BOOL("Transmit enabled", tx_enabled, ""));
     f.push_back(MZ_INT("Transmit power", tx_power, 0, 30, "dBm", "0 = region maximum"));
@@ -314,6 +316,7 @@ std::unique_ptr<Screen> page_lora(App& app)
             return std::string();
         },
         12, "Empty = automatic. Must be legal in your region"));
+    f.back().empty_text = "automatic";
     return make_editor(
         app, "LoRa radio", std::move(f),
         [&app, cfg, before]() {
@@ -1171,7 +1174,8 @@ public:
 
         header("Radio");
         entry("Region", region_name(mesh.config.lora.region), [a]() { a->push(make_region_picker(*a, false)); });
-        entry("LoRa radio", mesh.preset_name(), open(page_lora));
+        entry("LoRa radio", mesh.preset_name() + (mesh.config.lora.override_frequency != 0 ? ", fixed freq" : ""),
+              open(page_lora));
         int enabled = 0;
         for (int i = 0; i < kMaxChannels; ++i) enabled += mesh.channel_enabled(i) ? 1 : 0;
         entry("Channels", std::to_string(enabled) + " of 8", [a]() { a->push(make_channels(*a)); });
