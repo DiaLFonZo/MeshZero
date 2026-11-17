@@ -78,6 +78,17 @@ static void test_base64()
 static void test_util()
 {
     CHECK(node_id_str(0x1234abcd) == "!1234abcd");
+    CHECK(version_compare("0.1.1", "0.1.0") > 0);
+    CHECK(version_compare("0.1.10", "0.1.9") > 0);
+    CHECK(version_compare("0.2", "0.1.9") > 0);
+    CHECK(version_compare("0.1", "0.1.0") == 0);
+    CHECK(version_compare("0.1.0", "0.1.1") < 0);
+    CHECK(version_compare("", "0.1.0") < 0);
+    CHECK(release_version("{\"url\":\"x\",\"tag_name\": \"v0.1.2\",\"name\":\"MeshZero 0.1.2\"}") == "0.1.2");
+    CHECK(release_version("{\"tag_name\":\"1.0\"}") == "1.0");
+    CHECK(release_version("{\"tag_name\":\"v1.0-beta'; rm\"}").empty());
+    CHECK(release_version("{\"message\":\"Not Found\"}").empty());
+    CHECK(release_version("").empty());
     CHECK(unescape_field(escape_field("a\tb\nc\\d")) == "a\tb\nc\\d");
     CHECK(escape_field("a\tb").find('\t') == std::string::npos);
     CHECK(utf8_truncate("h\xc3\xa9llo", 2) == "h");

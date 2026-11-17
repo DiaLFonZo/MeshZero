@@ -147,7 +147,16 @@ void Keypad::handle(uint16_t code, int32_t value, std::deque<Key>& out)
         default:
             break;
     }
-    if (value == 0) return;  // releases carry no information for us
+    if (value == 0) {
+        // Releases carry no information for us, except for the key that is held to exit.
+        if (code == KEY_ESC) {
+            Key up;
+            up.k       = K::Esc;
+            up.release = true;
+            out.push_back(up);
+        }
+        return;
+    }
 
     Key key;
     key.repeat = value == 2;

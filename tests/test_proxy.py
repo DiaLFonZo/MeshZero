@@ -75,7 +75,11 @@ def handshake(nonce, heartbeat=False):
             if msg.WhichOneof("payload_variant") == "config_complete_id":
                 assert msg.config_complete_id == nonce
                 break
-            kinds.append(msg.WhichOneof("payload_variant"))
+            # Live traffic for the other clients (packets, a queue status
+            # answering their heartbeat) can land in between; it is not part
+            # of the answer.
+            if msg.WhichOneof("payload_variant") not in ("packet", "queueStatus"):
+                kinds.append(msg.WhichOneof("payload_variant"))
         answered = False
         if heartbeat:
             send(mesh_pb2.ToRadio(heartbeat=mesh_pb2.Heartbeat()))

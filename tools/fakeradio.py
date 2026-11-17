@@ -172,7 +172,7 @@ class Radio:
 
     # ----------------------------------------------------------- packets
     def deliver(self, sender, to, port, payload, channel=0, request_id=0, hops=0, snr=5.0, delay=0.0, pki=False,
-                tapback_to=0):
+                tapback_to=0, reply_to=0):
         packet_id = self.next_id()
 
         def run():
@@ -186,6 +186,8 @@ class Radio:
             if tapback_to:
                 packet.decoded.emoji = 1
                 packet.decoded.reply_id = tapback_to
+            if reply_to:
+                packet.decoded.reply_id = reply_to
             self.send(mesh_pb2.FromRadio(packet=packet))
         threading.Timer(delay, run).start()
         return packet_id
@@ -285,6 +287,9 @@ class Radio:
                                       (0xA1B2C307, sent[4], "\u2764\ufe0f")]:
             self.deliver(sender, BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, emoji.encode(), tapback_to=target)
             time.sleep(0.1)
+        # ... and an answer to one of them.
+        self.deliver(0xA1B2C304, BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, b"Nice range, what antenna?", hops=1,
+                     reply_to=sent[4])
         stats = telemetry_pb2.Telemetry(time=int(time.time()))
         stats.local_stats.num_packets_rx = 412
         stats.local_stats.num_packets_rx_bad = 9

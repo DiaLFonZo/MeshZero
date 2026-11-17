@@ -34,26 +34,6 @@ constexpr uint64_t kKeyRetryMs    = 6 * 60 * 1000;
 constexpr uint64_t kKeyRetryMaxMs = 60 * 60 * 1000;
 constexpr int kKeyPatience        = 3;  // unanswered requests before the chat stops saying it is waiting
 
-std::string read_state_path()
-{
-    std::string base;
-    if (const char* x = getenv("XDG_STATE_HOME"); x && x[0]) {
-        base = x;
-    } else if (const char* h = getenv("HOME"); h && h[0]) {
-        base = std::string(h) + "/.local/state";
-    } else {
-        base = "/tmp";
-    }
-    return base + "/meshzero";
-}
-
-void mkdirs(const std::string& path)
-{
-    for (size_t i = 1; i <= path.size(); ++i) {
-        if (i == path.size() || path[i] == '/') mkdir(path.substr(0, i).c_str(), 0755);
-    }
-}
-
 int hops_of(const meshtastic_MeshPacket& p)
 {
     return p.hop_start != 0 && p.hop_start >= p.hop_limit ? static_cast<int>(p.hop_start - p.hop_limit) : -1;
@@ -1250,7 +1230,7 @@ void Mesh::load_history()
 
 void Mesh::load_read_state()
 {
-    std::ifstream in(read_state_path() + "/read");
+    std::ifstream in(user_state_dir() + "/read");
     std::string kind;
     uint32_t id = 0;
     uint32_t ts = 0;
@@ -1263,8 +1243,8 @@ void Mesh::load_read_state()
 
 void Mesh::save_read_state()
 {
-    const std::string dir = read_state_path();
-    mkdirs(dir);
+    const std::string dir = user_state_dir();
+    make_dirs(dir);
     std::ofstream out(dir + "/read.tmp", std::ios::trunc);
     if (!out) return;
     for (const auto& [key, c] : chats) {

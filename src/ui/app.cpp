@@ -4,8 +4,11 @@
 #include <ctime>
 
 #include "common/util.h"
+#include "ui/update.h"
 
 namespace mz {
+
+constexpr uint64_t kExitHoldMs = 2000;
 
 namespace {
 const char* const kTabNames[kTabCount] = {"Chats", "Nodes", "Map", "Radio", "Setup"};
@@ -161,6 +164,16 @@ void App::handle_key(const Key& pressed)
 {
     Screen* s = top();
     if (!s) return;
+    // Leaving the app takes holding Esc, so a stray press does not close it.
+    // The wait itself is in tick(); here the hold begins and ends.
+    if (pressed.release) {
+        if (pressed.k == K::Esc) esc_held_ms_ = 0;
+        return;
+    }
+    if (esc_held_ms_ != 0) {
+        if (pressed.k == K::Esc && pressed.repeat) return;  // still held
+        esc_held_ms_ = 0;
+    }
     Key key = pressed;
     if (key.k == K::Char && !key.ctrl && !s->wants_text()) {
         switch (key.ch) {
@@ -199,8 +212,11 @@ void App::handle_key(const Key& pressed)
         if (key.k == K::Esc) {
             if (stack_.size() > 1) {
                 pop();
-            } else {
-                quit();
+            } else if (!key.repeat) {
+                // Not on a repeat: holding Esc to go back through several
+                // pages must not carry on into leaving the app.
+                esc_held_ms_ = now_ms();
+                notify("Keep holding Esc to exit");
             }
         } else if (s->tab() >= 0 && !key.ctrl) {
             if (key.k == K::Tab || key.k == K::Right) switch_tab(s->tab() + 1);
@@ -304,6 +320,8 @@ void App::tick()
 {
     const uint64_t now = now_ms();
 
+    if (esc_held_ms_ != 0 && now - esc_held_ms_ >= kExitHoldMs) quit();
+
     // Drain model events as they arrive so toasts feel immediate.
     while (!mesh.events.empty()) {
         UiEvent ev = std::move(mesh.events.front());
@@ -353,6 +371,9 @@ void App::tick()
 
     if (now - last_tick_ >= 250) {
         last_tick_ = now;
+        if (update::take_notice()) {
+            notify(LV_SYMBOL_DOWNLOAD " MeshZero " + update::available() + " is available");
+        }
         // A radio without a region may not transmit: ask once, right away.
         if (mesh.ready() && mesh.region_unset() && !region_prompted_) {
             region_prompted_ = true;

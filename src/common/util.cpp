@@ -2,6 +2,9 @@
 #include "common/util.h"
 
 #include <cmath>
+#include <cstdlib>
+
+#include <sys/stat.h>
 
 namespace mz {
 
@@ -127,6 +130,53 @@ std::string trim(const std::string& text)
     while (a < b && (text[a] == ' ' || text[a] == '\t' || text[a] == '\n' || text[a] == '\r')) ++a;
     while (b > a && (text[b - 1] == ' ' || text[b - 1] == '\t' || text[b - 1] == '\n' || text[b - 1] == '\r')) --b;
     return text.substr(a, b - a);
+}
+
+int version_compare(const std::string& a, const std::string& b)
+{
+    if (a.empty() || b.empty()) return a.empty() == b.empty() ? 0 : a.empty() ? -1 : 1;
+    const std::vector<std::string> pa = split(a, '.'), pb = split(b, '.');
+    for (size_t i = 0; i < pa.size() || i < pb.size(); ++i) {
+        const unsigned long x = i < pa.size() ? strtoul(pa[i].c_str(), nullptr, 10) : 0;
+        const unsigned long y = i < pb.size() ? strtoul(pb[i].c_str(), nullptr, 10) : 0;
+        if (x != y) return x < y ? -1 : 1;
+    }
+    return 0;
+}
+
+std::string release_version(const std::string& json)
+{
+    const size_t key = json.find("\"tag_name\"");
+    if (key == std::string::npos) return {};
+    const size_t open = json.find('"', json.find(':', key) == std::string::npos ? key : json.find(':', key));
+    if (open == std::string::npos) return {};
+    const size_t close = json.find('"', open + 1);
+    if (close == std::string::npos) return {};
+    std::string tag = json.substr(open + 1, close - open - 1);
+    if (!tag.empty() && (tag[0] == 'v' || tag[0] == 'V')) tag.erase(0, 1);
+    // Shown on screen and kept in a file: digits and dots only.
+    if (tag.empty() || tag.size() > 20 || tag.find_first_not_of("0123456789.") != std::string::npos) return {};
+    return tag;
+}
+
+std::string user_state_dir()
+{
+    std::string base;
+    if (const char* x = getenv("XDG_STATE_HOME"); x && x[0]) {
+        base = x;
+    } else if (const char* h = getenv("HOME"); h && h[0]) {
+        base = std::string(h) + "/.local/state";
+    } else {
+        base = "/tmp";
+    }
+    return base + "/meshzero";
+}
+
+void make_dirs(const std::string& path)
+{
+    for (size_t i = 1; i <= path.size(); ++i) {
+        if (i == path.size() || path[i] == '/') mkdir(path.substr(0, i).c_str(), 0755);
+    }
 }
 
 std::string utf8_truncate(const std::string& text, size_t max_bytes)

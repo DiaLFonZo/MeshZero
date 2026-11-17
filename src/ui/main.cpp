@@ -19,6 +19,7 @@
 #include "ui/display.h"
 #include "ui/keys.h"
 #include "ui/mesh.h"
+#include "ui/update.h"
 
 using namespace mz;
 
@@ -44,7 +45,7 @@ void usage()
            "  --display KIND       fbdev, sdl or headless (default: fbdev on the device)\n"
            "  --fb PATH            framebuffer device (default: the built-in LCD)\n"
            "  --zoom N             SDL window scale (default 3)\n"
-           "  --script FILE        headless automation: 'wait MS', 'key NAME', 'type TEXT',\n"
+           "  --script FILE        headless automation: 'wait MS', 'key NAME', 'hold NAME MS', 'type TEXT',\n"
            "                       'shot FILE.png', 'quit' (one command per line)\n"
            "  --version\n",
            MESHZERO_VERSION);
@@ -102,7 +103,27 @@ int run_script(const std::string& path, App& app, Mesh& mesh)
                 }
                 app.handle_key(key);
                 pump(app, mesh, nullptr, 30);
+                if (key.k == K::Esc) {
+                    key.release = true;
+                    app.handle_key(key);
+                }
             }
+        } else if (cmd == "hold") {
+            // hold esc 2500: keeps Esc down for that many milliseconds.
+            std::istringstream parts(arg);
+            std::string name;
+            int ms = 0;
+            parts >> name >> ms;
+            Key key;
+            if (!key_from_name(name, key)) {
+                fprintf(stderr, "meshzero: unknown key '%s'\n", name.c_str());
+                return 2;
+            }
+            app.handle_key(key);
+            const bool alive = pump(app, mesh, nullptr, static_cast<uint64_t>(ms));
+            key.release      = true;
+            app.handle_key(key);
+            if (!alive) return 0;
         } else if (cmd == "type") {
             for (const char c : arg) {
                 Key key;
@@ -187,8 +208,11 @@ int main(int argc, char** argv)
         app.start();
 
         if (!script.empty()) {
+            // Scripted runs stay off the network unless told where to look.
+            if (getenv("MESHZERO_UPDATE_URL")) update::start();
             rc = run_script(script, app, mesh);
         } else {
+            update::start();
             Keypad keypad;
             const bool device_keys = display_kind() == DisplayKind::Fbdev;
             if (device_keys && !keypad.open_default()) fprintf(stderr, "meshzero: no keyboard found\n");

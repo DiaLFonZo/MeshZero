@@ -95,6 +95,7 @@ private:
     std::vector<std::function<void()>> pending_;
     Screen* shown_      = nullptr;
     uint64_t last_tick_ = 0;
+    uint64_t esc_held_ms_ = 0;  // since when Esc is held on a home page, 0 if it is not
     bool quit_          = false;
     bool region_prompted_ = false;
 };

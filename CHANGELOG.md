@@ -1,7 +1,37 @@
 # Changelog
 
-## 0.1.1
+## 0.2.0
 
+- Lists and text pages show a small arrow at the bottom, or at the top, while
+  there is more to scroll to in that direction.
+- Replies. Pick a message with Up, press Enter and choose Reply. Replies show
+  the message they answer on a line above them.
+- Emoji can be typed: Tab in a chat opens a grid to pick from. In a direct
+  chat Tab used to open the node's details; those are now under Enter on one
+  of its messages, "About the sender".
+- Message details: who, when, hops, signal, encryption, delivery status and
+  reactions.
+- A message that was not delivered can be sent again from the same menu.
+- Channel links and QR codes that carry radio settings can be applied as a
+  whole (channels and radio), not only added as channels.
+- Setup > Channels > Community setups, starting with SFNarrow (Spain). Marked
+  experimental: it is new and still being worked on.
+- Setup > LoRa radio is simpler. One Modem row names the preset in use, or
+  Custom. Bandwidth, spreading factor and coding rate always show what is in
+  use, and changing one of them makes the modem Custom. The separate "Use
+  modem preset" switch is gone.
+- A fixed frequency can be set there for custom modems. It has to lie in the
+  region's band, and it is cleared when the region changes or a preset is
+  chosen.
+- The modem list only offers presets the bundled radio daemon knows.
+  VeryLongSlow, LiteFast, LiteSlow, NarrowFast and NarrowSlow were listed
+  before but ran as LongFast.
+- Leaving the app takes holding Esc for 2 seconds, so a stray press no longer
+  closes it.
+- The app tells you when a newer release is out: a line at the top the first
+  time it is seen, and Setup > Updates from then on. It looks when it starts,
+  at most once an hour, and only asks GitHub for the latest release number.
+  Turn it off under Setup > Updates.
 - Tapbacks. In a chat, Up picks a message and Enter offers a set of emoji to
   react with. Reactions are shown under the message they belong to, with who
   sent them, instead of as messages of their own.
