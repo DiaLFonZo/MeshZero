@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 cmake_minimum_required(VERSION 3.22)
-project(meshzero VERSION 0.1.0 LANGUAGES C CXX)
+project(meshzero VERSION 0.1.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,12 +27,22 @@ add_library(mz_proto STATIC
     third_party/nanopb/pb_encode.c)
 target_include_directories(mz_proto PUBLIC third_party/nanopb src/proto/gen)
 
+# QR code reader, compiled from its C sources.
+add_library(quirc STATIC
+    third_party/quirc/decode.c
+    third_party/quirc/identify.c
+    third_party/quirc/quirc.c
+    third_party/quirc/version_db.c)
+target_include_directories(quirc PUBLIC third_party/quirc)
+target_compile_options(quirc PRIVATE -w)
+
 add_library(mz_common STATIC
     src/common/history.cpp
     src/common/proto.cpp
+    src/common/qr.cpp
     src/common/util.cpp)
 target_include_directories(mz_common PUBLIC src)
-target_link_libraries(mz_common PUBLIC mz_proto)
+target_link_libraries(mz_common PUBLIC mz_proto PRIVATE quirc m)
 target_compile_options(mz_common PRIVATE -Wall -Wextra)
 
 # ------------------------------------------------------------------ daemon
@@ -67,7 +77,8 @@ if(MESHZERO_BUILD_UI)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/fonts/*.c")
     add_executable(meshzero ${MESHZERO_UI_SOURCES})
     target_include_directories(meshzero PRIVATE src)
-    target_link_libraries(meshzero PRIVATE mz_common lvgl m)
+    find_package(Threads REQUIRED)
+    target_link_libraries(meshzero PRIVATE mz_common lvgl m Threads::Threads)
     target_compile_options(meshzero PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
     set(MESHZERO_FONT_SOURCE_DIR "${lvgl_src_SOURCE_DIR}/scripts/built_in_font")
     target_compile_definitions(meshzero PRIVATE

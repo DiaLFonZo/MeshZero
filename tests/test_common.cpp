@@ -8,6 +8,7 @@
 
 #include "common/history.h"
 #include "common/proto.h"
+#include "common/qr.h"
 #include "common/util.h"
 
 using namespace mz;
@@ -154,6 +155,69 @@ static void test_history()
     rmdir(dir);
 }
 
+static void test_qr()
+{
+    // The link "https://meshtastic.org/e/#CgMSAQE" as a QR code, one character per module.
+    static const char* const kCode[] = {
+        "#######.#...####.###..#######",
+        "#.....#.#.#.##..#.#...#.....#",
+        "#.###.#..#......#.#.#.#.###.#",
+        "#.###.#.#..##.##.#....#.###.#",
+        "#.###.#..#.#..#.##.#..#.###.#",
+        "#.....#..#.###.##.##..#.....#",
+        "#######.#.#.#.#.#.#.#.#######",
+        "........#..#...######........",
+        "#.##.###..#..#.###.##.#..#.##",
+        ".###...###..####.####.###...#",
+        "##.#.##....#.#....#..#.#..##.",
+        "..##...#...##...#.#.#.#.#...#",
+        "#..##.###.....##.###.....##..",
+        "..####...#....#..#.#..#...###",
+        "#...#.##...###...#.#..###.###",
+        "##.#.#..#.##..###..##...#..#.",
+        "###..####.#.#.#..#####..##.#.",
+        ".....#..#.##..#......#.#.###.",
+        "#.##..#.#.##.######.##.##.#..",
+        "..#.#....###.##..######...#..",
+        ".#..####.#.#.##..##########..",
+        "........##.....##.#.#...#####",
+        "#######.###...#.#.###.#.##.#.",
+        "#.....#.###..##.#.#.#...##.##",
+        "#.###.#..##.#..#....#####.##.",
+        "#.###.#.#..#....#..###.###..#",
+        "#.###.#.##..#.#...####.#..#.#",
+        "#.....#...###.#.....#..###.#.",
+        "#######.###..#..#####...#..#.",
+    };
+    const int modules = static_cast<int>(sizeof(kCode) / sizeof(kCode[0]));
+    const int scale = 5, border = 4;
+    const int side = (modules + 2 * border) * scale;
+    std::vector<uint8_t> image(static_cast<size_t>(side) * side, 255);
+    for (int y = 0; y < modules; ++y) {
+        for (int x = 0; x < modules; ++x) {
+            if (kCode[y][x] != '#') continue;
+            for (int dy = 0; dy < scale; ++dy) {
+                for (int dx = 0; dx < scale; ++dx) {
+                    image[static_cast<size_t>((y + border) * scale + dy) * side + (x + border) * scale + dx] = 0;
+                }
+            }
+        }
+    }
+    CHECK(qr_decode(image.data(), side, side) == "https://meshtastic.org/e/#CgMSAQE");
+
+    std::vector<uint8_t> blank(static_cast<size_t>(side) * side, 128);
+    CHECK(qr_decode(blank.data(), side, side).empty());
+    CHECK(qr_decode(nullptr, 0, 0).empty());
+    for (unsigned attempt = 0; attempt < 4; ++attempt) {
+        CHECK(qr_decode_photo(image.data(), side, side, attempt) == "https://meshtastic.org/e/#CgMSAQE");
+        CHECK(qr_decode_photo(blank.data(), side, side, attempt).empty());
+    }
+    // Still works after its buffers were given back.
+    qr_release();
+    CHECK(qr_decode(image.data(), side, side) == "https://meshtastic.org/e/#CgMSAQE");
+    qr_release();
+}
+
 int main()
 {
     test_framing();
@@ -161,6 +225,7 @@ int main()
     test_base64();
     test_util();
     test_history();
+    test_qr();
     if (failures == 0) printf("all tests passed\n");
     return failures == 0 ? 0 : 1;
 }

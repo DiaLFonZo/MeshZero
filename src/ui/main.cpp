@@ -15,6 +15,7 @@
 #include "common/util.h"
 #include "lvgl.h"
 #include "ui/app.h"
+#include "ui/camera.h"
 #include "ui/display.h"
 #include "ui/keys.h"
 #include "ui/mesh.h"
@@ -175,6 +176,8 @@ int main(int argc, char** argv)
         fprintf(stderr, "meshzero: could not initialise the display\n");
         return 1;
     }
+
+    Camera::probe();
 
     int rc = 0;
     {

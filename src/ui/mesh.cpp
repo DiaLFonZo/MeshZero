@@ -28,6 +28,11 @@ constexpr uint64_t kSyncTimeoutMs = 45000;
 constexpr uint64_t kHeartbeatMs   = 30000;
 constexpr size_t kMaxChatMsgs     = 500;
 constexpr size_t kMaxPacketLog    = 200;
+// A node ignores a request for its info when it sent that less than five
+// minutes ago, hence the first wait. Each further one is twice as long.
+constexpr uint64_t kKeyRetryMs    = 6 * 60 * 1000;
+constexpr uint64_t kKeyRetryMaxMs = 60 * 60 * 1000;
+constexpr int kKeyPatience        = 3;  // unanswered requests before the chat stops saying it is waiting
 
 std::string read_state_path()
 {
@@ -271,6 +276,8 @@ void Mesh::poll()
         hb.which_payload_variant = meshtastic_ToRadio_heartbeat_tag;
         send_to_radio(hb);
     }
+
+    if (has_active_ && active_.dm) ensure_key(active_.id);
 
     while (!out_.empty() && fd_ >= 0) {
         const ssize_t n = send(fd_, out_.data(), out_.size(), MSG_NOSIGNAL);
@@ -605,7 +612,7 @@ void Mesh::add_message(const ChatKey& key, StoredMsg msg, bool live)
         UiEvent ev;
         ev.type = UiEvent::NewMessage;
         ev.chat = key;
-        ev.text = short_name(msg.from) + ": " + msg.text;
+        ev.text = short_name(msg.from) + (msg.is_tapback() ? " reacted " : ": ") + msg.text;
         events.push_back(std::move(ev));
     }
     c.msgs.push_back(std::move(msg));
@@ -673,6 +680,25 @@ uint32_t Mesh::send_packet(uint32_t to, uint8_t channel, meshtastic_PortNum port
 
 bool Mesh::send_text(const ChatKey& key, const std::string& text, uint32_t reply_id)
 {
+    return send_message(key, text, reply_id, false);
+}
+
+bool Mesh::send_tapback(const ChatKey& key, uint32_t target_id, const std::string& emoji)
+{
+    if (target_id == 0 || emoji.empty()) return false;
+    for (const StoredMsg& m : chat(key).msgs) {
+        if (m.outgoing && m.is_tapback() && m.reply_id == target_id && m.text == emoji && m.ack != AckState::Failed) {
+            toast("Already reacted with that");
+            return false;
+        }
+    }
+    return send_message(key, emoji, target_id, true);
+}
+
+// A tapback travels as a text message that carries only the emoji, flagged as
+// one and pointing at the message it reacts to.
+bool Mesh::send_message(const ChatKey& key, const std::string& text, uint32_t reply_id, bool tapback)
+{
     if (!ready()) {
         toast("Radio offline");
         return false;
@@ -696,6 +722,7 @@ bool Mesh::send_text(const ChatKey& key, const std::string& text, uint32_t reply
     p.which_payload_variant   = meshtastic_MeshPacket_decoded_tag;
     p.decoded.portnum         = meshtastic_PortNum_TEXT_MESSAGE_APP;
     p.decoded.reply_id        = reply_id;
+    p.decoded.emoji           = tapback ? 1 : 0;
     memcpy(p.decoded.payload.bytes, body.data(), body.size());
     p.decoded.payload.size = static_cast<pb_size_t>(body.size());
     send_to_radio(msg);
@@ -709,12 +736,15 @@ bool Mesh::send_text(const ChatKey& key, const std::string& text, uint32_t reply
     m.channel  = p.channel;
     m.outgoing = true;
     m.reply_id = reply_id;
+    m.emoji    = tapback;
     m.pki      = peer && peer->has_user && peer->user.public_key.size > 0;
     m.ack      = AckState::Pending;
     m.text     = body;
     pending_acks_[p.id] = key;
     if (pending_acks_.size() > 256) pending_acks_.erase(pending_acks_.begin());
     add_message(key, std::move(m), true);
+
+    if (key.dm) ensure_key(key.id);
     return true;
 }
 
@@ -753,6 +783,46 @@ void Mesh::request_nodeinfo(uint32_t dest)
     const uint32_t id = send_packet(dest, n ? n->channel : 0, meshtastic_PortNum_NODEINFO_APP,
                                     reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), true, true);
     toast(id ? "Node info requested from " + short_name(dest) : "Radio offline");
+}
+
+bool Mesh::has_key(uint32_t num) const
+{
+    const meshtastic_NodeInfo* n = node(num);
+    return n && n->has_user && n->user.public_key.size > 0;
+}
+
+bool Mesh::awaiting_key(uint32_t num) const
+{
+    if (has_key(num)) return false;
+    const auto it = key_asks_.find(num);
+    return it != key_asks_.end() && it->second.tries <= kKeyPatience;
+}
+
+void Mesh::ensure_key(uint32_t dest)
+{
+    if (!ready() || dest == my_num || dest == kBroadcast || has_key(dest)) return;
+    // Licensed operators send in the clear and have no key, on either side.
+    const meshtastic_NodeInfo* n = node(dest);
+    if (n && n->has_user && n->user.is_licensed) return;
+    if (const meshtastic_NodeInfo* self = me(); self && self->has_user && self->user.is_licensed) return;
+
+    // A node that is away or too old to have a key never answers: ask less
+    // and less often, so an open chat does not keep spending airtime on it.
+    const uint64_t now = now_ms();
+    KeyAsk& ask        = key_asks_[dest];
+    if (ask.tries > 0) {
+        const int doublings = ask.tries - 1 < 4 ? ask.tries - 1 : 4;
+        const uint64_t wait = kKeyRetryMs << doublings;
+        if (now - ask.at < (wait < kKeyRetryMaxMs ? wait : kKeyRetryMaxMs)) return;
+    }
+    ask.at = now;
+    ++ask.tries;
+
+    meshtastic_User user = meshtastic_User_init_zero;
+    if (const meshtastic_NodeInfo* self = me(); self && self->has_user) user = self->user;
+    const std::string bytes = pb_encode_msg(meshtastic_User_fields, user);
+    send_packet(dest, n ? n->channel : 0, meshtastic_PortNum_NODEINFO_APP,
+        reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), true, true);
 }
 
 void Mesh::request_telemetry(uint32_t dest)
@@ -1147,6 +1217,7 @@ void Mesh::set_active_chat(const ChatKey* key)
     if (key) {
         active_ = *key;
         mark_read(*key);
+        if (key->dm) ensure_key(key->id);
     }
 }
 

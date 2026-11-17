@@ -2,7 +2,7 @@
   "app_name": "MeshZero",
   "package_name": "meshzero",
   "bin_name": "meshzero",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Meshtastic client for the CardputerZero and Cap LoRa-1262",
   "store": {
     "summary": "Meshtastic for the Cap LoRa-1262, with chat, DMs, node list and a Wi-Fi API",
@@ -27,7 +27,7 @@
     },
     "share_code": "MZRO",
     "permissions": {
-      "camera": false,
+      "camera": true,
       "microphone": false,
       "imu": false,
       "network": true,

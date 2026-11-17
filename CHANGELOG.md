@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.1
+
+- Tapbacks. In a chat, Up picks a message and Enter offers a set of emoji to
+  react with. Reactions are shown under the message they belong to, with who
+  sent them, instead of as messages of their own.
+- Fixed the Meshtastic phone app giving up with "Could not establish a stable
+  connection after repeated attempts". The app fetches the node list in a
+  second step, and the answer to it started with a packet that made the app
+  begin again.
+- Fixed the Meshtastic iOS app dropping the connection after about 24 seconds
+  on a quiet mesh. The app expects an answer to its heartbeat within 5
+  seconds, and heartbeats were not passed on to the radio. They are now, so
+  clients get the same answer as from any other node.
+- The older Cap LoRa-1262 without the IO expander is recognised by asking the
+  radio chip itself, and runs without the antenna switch step.
+- Direct messages fetch the other node's public key on their own. Opening a
+  chat with a node whose key is missing, or sending to it, asks that node for
+  its key, and asks again after 6 minutes while the chat stays open, then
+  less and less often.
+- The chat shows when it is still waiting for a key.
+- Channels can be added by scanning a shared QR code with the camera
+  (Setup > Channels > Scan QR code). The app lists what the code contains and
+  asks before adding it. The entry only appears on models with a camera, and
+  needs the system's `rpicam-vid`.
+
 ## 0.1.0
 
 First release.

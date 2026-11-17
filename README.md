@@ -15,18 +15,20 @@ other mesh networking technologies.
 ## What it does
 
 - Channel chat and DMs with delivery status and unread counts.
+- Tapbacks: react to any message with an emoji, and see who reacted to what.
 - Background service keeps meshtastic running even when off app.
 - Node listing with details, actions, and all supported functions.
 - A simple radar-style map of the nodes around you.
 - A radio page with link state, counters, GPS fix and a live packet log.
 - Settings for most of what the phone apps cover: region, modem preset,
-  channels and keys (add by URL, share by QR), node name and role, position,
+  channels and keys (add by URL or by scanning a QR code with the camera,
+  share by QR), node name and role, position,
   power, network, security, MQTT, telemetry and a few other modules.
 - The Meshtastic TCP API on port 4403, for MeshMonitor, the `meshtastic` CLI
   or the phone apps over Wi-Fi. Enable that in settings.
 
 Potentially Roadmap:
-- Replies and tapbacks
+- Replies
 
 ## You need
 
@@ -43,7 +45,7 @@ Get it from the CardputerZero store, or download the `.deb` from the releases
 page and install it yourself:
 
 ```sh
-sudo apt install ./meshzero_0.1.0_arm64.deb
+sudo apt install ./meshzero_0.1.1_arm64.deb
 ```
 
 ## Keys
@@ -52,6 +54,7 @@ sudo apt install ./meshzero_0.1.0_arm64.deb
 | --- | --- |
 | Arrows (F, X, Z, C) | Move and scroll. No Fn needed, except while typing text |
 | Enter | Open, edit, send |
+| Up, in a chat | Pick a message to react to. Up and Down move between messages, Enter chooses the emoji |
 | Esc | Back. On a changed settings page it asks whether to save |
 | Tab, Left, Right | Switch between Chats, Nodes, Map, Radio and Setup |
 | + and - | Zoom the map, 0 to fit everything |
@@ -98,9 +101,18 @@ a radio with a handful of nodes:
 
 ```sh
 pip install meshtastic
-tools/fakeradio.py &
+python3 tools/fakeradio.py &
 MESHZERO_STATE_DIR=/tmp/mz build/host/meshzerod serve &
 MESHZERO_STATE_DIR=/tmp/mz build/host/meshzero --display sdl
+```
+
+The camera can be stood in for as well. `MESHZERO_CAMERA_CMD` names a program
+that writes raw 1920x1080 YUV 4:2:0 frames, for example a still image through
+ffmpeg:
+
+```sh
+export MESHZERO_CAMERA_CMD="ffmpeg -loglevel quiet -re -loop 1 -i code.png \
+  -vf scale=300:300,pad=1920:1080:-1:-1:gray -pix_fmt yuv420p -r 10 -f rawvideo -"
 ```
 
 `meshzero --script FILE` runs the interface with no display and saves

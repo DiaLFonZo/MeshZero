@@ -33,6 +33,9 @@ struct StoredMsg {
     AckState ack      = AckState::None;
     int ack_error     = 0;
     std::string text;
+
+    // A reaction to another message: the text is the emoji, reply_id the target.
+    bool is_tapback() const { return emoji && reply_id != 0; }
 };
 
 std::string history_dir();

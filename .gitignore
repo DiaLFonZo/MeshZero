@@ -3,3 +3,5 @@ dist/
 third_party/meshtasticd/
 *.pyc
 __pycache__/
+DEVLOG.md
+qr-test.jpg

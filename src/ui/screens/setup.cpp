@@ -5,6 +5,7 @@
 
 #include "common/util.h"
 #include "meshtastic/apponly.pb.h"
+#include "ui/camera.h"
 #include "ui/screens/editor.h"
 
 namespace mz {
@@ -526,18 +527,26 @@ std::string channel_url(const Mesh& mesh, int only_index)
            base64_encode(buffer, stream.bytes_written, true);
 }
 
-// Adds the channels of a shared URL to free slots. Returns a message for the user.
-std::string add_channels_from_url(Mesh& mesh, const std::string& url)
+// Reads the channels out of a shared URL. Returns an empty string, or what is wrong with it.
+std::string parse_channel_url(const std::string& url, meshtastic_ChannelSet& set)
 {
     const size_t hash = url.find('#');
     std::vector<uint8_t> bytes;
     if (hash == std::string::npos || !base64_decode(url.substr(hash + 1), bytes) || bytes.empty()) {
         return "Not a channel URL";
     }
-    meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+    set = meshtastic_ChannelSet_init_zero;
     if (!pb_decode_msg(meshtastic_ChannelSet_fields, bytes.data(), bytes.size(), set) || set.settings_count == 0) {
         return "Invalid channel URL";
     }
+    return {};
+}
+
+// Adds the channels of a shared URL to free slots. Returns a message for the user.
+std::string add_channels_from_url(Mesh& mesh, const std::string& url)
+{
+    meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+    if (const std::string error = parse_channel_url(url, set); !error.empty()) return error;
     int added = 0;
     mesh.begin_edit();
     for (pb_size_t s = 0; s < set.settings_count; ++s) {
@@ -701,6 +710,8 @@ public:
         };
         action(LV_SYMBOL_IMAGE "  Share all (QR code)");
         action(LV_SYMBOL_PLUS "  Add from URL");
+        // Only on models that have a camera.
+        if (Camera::available()) action(LV_SYMBOL_EYE_OPEN "  Scan QR code");
         list_->set_items(items);
     }
 
@@ -713,6 +724,8 @@ public:
             app.push(page_channel(app, i));
         } else if (i == kMaxChannels) {
             app.push(make_qr(app, "Share channels", channel_url(mesh, -1)));
+        } else if (i == kMaxChannels + 2) {
+            scan();
         } else {
             App* a = &app;
             app.push(make_input(app, "Add channels", "", 400,
@@ -727,6 +740,34 @@ public:
     }
 
 private:
+    // Opens the camera, and asks before adding what a channel code contains.
+    void scan()
+    {
+        App* a = &app;
+        app.push(make_scanner(app, LV_SYMBOL_LEFT " Scan channel code", [a](const std::string& text) {
+            meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+            if (!parse_channel_url(text, set).empty()) {
+                a->toast("Not a channel code", true);
+                return false;
+            }
+            std::string names;
+            for (pb_size_t s = 0; s < set.settings_count; ++s) {
+                const meshtastic_ChannelSettings& c = set.settings[s];
+                names += (s ? "\n" : "") + std::string(c.name[0] ? c.name : "(default name)") + "  -  " + psk_summary(c);
+            }
+            const std::string question =
+                set.settings_count == 1 ? "Add this channel?" : "Add these " + std::to_string(set.settings_count) + " channels?";
+            a->pop();  // the camera view
+            a->push(make_confirm(*a, "Add channels", question + "\n\n" + ui::clean(names), {"Cancel", "Add"},
+                                 [a, text](int choice) {
+                                     if (choice != 1) return;
+                                     const std::string result = add_channels_from_url(a->mesh, text);
+                                     a->toast(result, result.rfind("Added", 0) != 0);
+                                 }));
+            return true;
+        }));
+    }
+
     std::unique_ptr<ui::ListView> list_;
 };
 

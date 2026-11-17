@@ -8,13 +8,14 @@ Python client as the API consumer.
 """
 import os
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-from meshtastic.protobuf import channel_pb2
+from meshtastic.protobuf import channel_pb2, mesh_pb2
 from meshtastic.tcp_interface import TCPInterface
 from pubsub import pub
 
@@ -40,6 +41,50 @@ def can_connect(host):
         return True
     except OSError:
         return False
+
+
+def handshake(nonce, heartbeat=False):
+    """Asks for a configuration the way the phone apps do, over a plain socket.
+    Returns the kinds of the frames up to config_complete, and whether the
+    heartbeat sent afterwards was answered."""
+    sock = socket.create_connection(("127.0.0.1", API_PORT), timeout=5)
+
+    def send(msg):
+        data = msg.SerializeToString()
+        sock.sendall(b"\x94\xc3" + struct.pack(">H", len(data)) + data)
+
+    def frames():
+        buffer = b""
+        while True:
+            while len(buffer) >= 4 and len(buffer) >= 4 + struct.unpack(">H", buffer[2:4])[0]:
+                length = struct.unpack(">H", buffer[2:4])[0]
+                msg = mesh_pb2.FromRadio()
+                msg.ParseFromString(buffer[4:4 + length])
+                buffer = buffer[4 + length:]
+                yield msg
+            chunk = sock.recv(4096)
+            if not chunk:
+                return
+            buffer += chunk
+
+    try:
+        incoming = frames()
+        send(mesh_pb2.ToRadio(want_config_id=nonce))
+        kinds = []
+        for msg in incoming:
+            if msg.WhichOneof("payload_variant") == "config_complete_id":
+                assert msg.config_complete_id == nonce
+                break
+            kinds.append(msg.WhichOneof("payload_variant"))
+        answered = False
+        if heartbeat:
+            send(mesh_pb2.ToRadio(heartbeat=mesh_pb2.Heartbeat()))
+            answered = any(msg.WhichOneof("payload_variant") == "queueStatus" for msg in incoming)
+        return kinds, answered
+    except socket.timeout:
+        raise AssertionError("no answer to want_config %d" % nonce)
+    finally:
+        sock.close()
 
 
 def main():
@@ -72,7 +117,16 @@ def main():
             assert client.localNode.localConfig.lora.hop_limit == 3
         print("ok: two simultaneous clients received the full configuration")
 
-        # A message sent by one client is shown to the other.
+        # The phone apps fetch the configuration and the nodes in two rounds.
+        # The second must not start with my_info, or they begin again.
+        kinds, _ = handshake(69420)
+        assert kinds[0] == "my_info" and "channel" in kinds and "config" in kinds, kinds
+        assert kinds.count("node_info") == 1, "config-only round listed other nodes"
+        kinds, answered = handshake(69421, heartbeat=True)
+        assert kinds == ["node_info"] * 9, kinds
+        assert answered, "heartbeat got no queue status"
+        print("ok: two-round handshake as the phone apps do it, heartbeat answered")
+
         b.sendText("ping from b")
         wait_for(lambda: any(i is a and p["decoded"]["text"] == "ping from b" for i, p in received), what="echo to client a")
         assert not any(i is b and p["decoded"]["text"] == "ping from b" for i, p in received), "sender got its own echo"

@@ -126,5 +126,9 @@ std::unique_ptr<Screen> make_input(App& app, const std::string& title, const std
                                    const std::string& help, std::function<bool(const std::string&)> on_accept,
                                    const char* accept_chars = nullptr);
 std::unique_ptr<Screen> make_qr(App& app, const std::string& title, const std::string& data);
+// Camera view that looks for a QR code (scan.cpp). on_code gets the text of
+// each code seen and returns true once it has taken over, false to keep looking.
+std::unique_ptr<Screen> make_scanner(App& app, const std::string& title,
+                                     std::function<bool(const std::string&)> on_code);
 
 }  // namespace mz
