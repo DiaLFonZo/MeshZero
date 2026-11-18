@@ -131,7 +131,11 @@ public:
     void request_nodeinfo(uint32_t dest);
     bool has_key(uint32_t num) const;
     bool awaiting_key(uint32_t num) const;
-    void ensure_key(uint32_t dest);
+    // Asks a node for its user record (names and public key) in the background,
+    // retrying with growing pauses, until it is known. `need_key` also waits for
+    // the public key. `user_waiting` marks a request someone is looking at the
+    // screen for: it goes first and is sent even when the channel is busy.
+    void want_info(uint32_t num, bool need_key, bool user_waiting, uint64_t delay_ms = 0);
     void request_telemetry(uint32_t dest);
 
     // ---- administration (local node) ---------------------------------
@@ -183,6 +187,11 @@ private:
     void save_read_state();
     void set_state(LinkState s);
     uint32_t next_id();
+    bool info_complete(uint32_t num, bool need_key) const;
+    bool channel_busy() const;
+    uint32_t send_info_request(uint32_t dest);
+    void ask_channel_senders(const ChatKey& key);
+    void pump_info_asks();
 
     std::string host_ = "127.0.0.1";
     uint16_t port_    = kDefaultApiPort;
@@ -204,11 +213,15 @@ private:
     ChatKey active_;
     std::map<uint32_t, ChatKey> pending_acks_;  // packet id -> conversation
     std::map<uint32_t, uint32_t> trace_ids_;    // request id -> destination
-    struct KeyAsk {
-        uint64_t at = 0;  // when it was last asked for
-        int tries   = 0;
+    struct InfoAsk {
+        uint64_t due  = 0;  // earliest time for the next request
+        uint64_t at   = 0;  // when it was last asked
+        int tries     = 0;
+        bool need_key = false;
+        bool urgent   = false;  // someone is waiting on the screen for it
     };
-    std::map<uint32_t, KeyAsk> key_asks_;  // node -> requests for its public key
+    std::map<uint32_t, InfoAsk> info_asks_;  // node -> automatic requests for its info
+    uint64_t next_info_ms_ = 0;              // earliest time for any automatic request
 };
 
 const char* portnum_name(int portnum);
