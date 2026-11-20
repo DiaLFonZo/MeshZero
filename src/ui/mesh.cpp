@@ -1233,13 +1233,14 @@ std::string Mesh::preset_name() const
 
 std::string modem_preset_name(int preset)
 {
+    // As DisplayFormatters::getModemPresetDisplayName() in the radio firmware
+    // MeshZero runs (2.7.26). It doesn't know the Very long, Lite and Narrow
+    // presets: it runs them as LongFast, under the name "Invalid".
     switch (preset) {
         case meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST:
             return "LongFast";
         case meshtastic_Config_LoRaConfig_ModemPreset_LONG_SLOW:
             return "LongSlow";
-        case meshtastic_Config_LoRaConfig_ModemPreset_VERY_LONG_SLOW:
-            return "VLongSlow";
         case meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_SLOW:
             return "MediumSlow";
         case meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_FAST:
@@ -1254,16 +1255,8 @@ std::string modem_preset_name(int preset)
             return "ShortTurbo";
         case meshtastic_Config_LoRaConfig_ModemPreset_LONG_TURBO:
             return "LongTurbo";
-        case meshtastic_Config_LoRaConfig_ModemPreset_LITE_FAST:
-            return "LiteFast";
-        case meshtastic_Config_LoRaConfig_ModemPreset_LITE_SLOW:
-            return "LiteSlow";
-        case meshtastic_Config_LoRaConfig_ModemPreset_NARROW_FAST:
-            return "NarrowFast";
-        case meshtastic_Config_LoRaConfig_ModemPreset_NARROW_SLOW:
-            return "NarrowSlow";
         default:
-            return "Custom";
+            return "Invalid";
     }
 }
 

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Setup tab: radio, node, channel and module configuration.
+#include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstring>
 #include <optional>
 #include <random>
@@ -22,44 +25,54 @@ struct RegionInfo {
     int value;
     const char* name;
     const char* band;
+    // The radio daemon's own row for the region (firmware 2.7.26,
+    // RadioInterface.cpp): its band in MHz and power limit in dBm.
+    float start, end;
+    int power;
     bool supported;  // the cap and the radio daemon's firmware can use it
 };
 const RegionInfo kRegions[] = {
-    {meshtastic_Config_LoRaConfig_RegionCode_US, "US", "United States 902-928 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_EU_868, "EU_868", "Europe 869.4-869.65 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_ANZ, "ANZ", "Australia / NZ 915-928 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_NZ_865, "NZ_865", "New Zealand 864-868 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_JP, "JP", "Japan 920.5-923.5 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_KR, "KR", "Korea 920-923 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_TW, "TW", "Taiwan 920-925 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_RU, "RU", "Russia 868.7-869.2 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_IN, "IN", "India 865-867 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_TH, "TH", "Thailand 920-925 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_UA_868, "UA_868", "Ukraine 868-868.6 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_MY_919, "MY_919", "Malaysia 919-924 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_SG_923, "SG_923", "Singapore 917-925 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_PH_868, "PH_868", "Philippines 868-869.4 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_PH_915, "PH_915", "Philippines 915-918 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_KZ_863, "KZ_863", "Kazakhstan 863-868 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_NP_865, "NP_865", "Nepal 865-868 MHz", true},
-    {meshtastic_Config_LoRaConfig_RegionCode_BR_902, "BR_902", "Brazil 902-907.5 MHz", true},
+    {meshtastic_Config_LoRaConfig_RegionCode_US, "US", "United States 902-928 MHz", 902.0f, 928.0f, 30, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_EU_868, "EU_868", "Europe 869.4-869.65 MHz", 869.4f, 869.65f, 27, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_ANZ, "ANZ", "Australia / NZ 915-928 MHz", 915.0f, 928.0f, 30, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_NZ_865, "NZ_865", "New Zealand 864-868 MHz", 864.0f, 868.0f, 36, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_JP, "JP", "Japan 920.5-923.5 MHz", 920.5f, 923.5f, 13, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_KR, "KR", "Korea 920-923 MHz", 920.0f, 923.0f, 23, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_TW, "TW", "Taiwan 920-925 MHz", 920.0f, 925.0f, 27, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_RU, "RU", "Russia 868.7-869.2 MHz", 868.7f, 869.2f, 20, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_IN, "IN", "India 865-867 MHz", 865.0f, 867.0f, 30, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_TH, "TH", "Thailand 920-925 MHz", 920.0f, 925.0f, 27, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_UA_868, "UA_868", "Ukraine 868-868.6 MHz", 868.0f, 868.6f, 14, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_MY_919, "MY_919", "Malaysia 919-924 MHz", 919.0f, 924.0f, 27, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_SG_923, "SG_923", "Singapore 917-925 MHz", 917.0f, 925.0f, 20, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_PH_868, "PH_868", "Philippines 868-869.4 MHz", 868.0f, 869.4f, 14, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_PH_915, "PH_915", "Philippines 915-918 MHz", 915.0f, 918.0f, 24, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_KZ_863, "KZ_863", "Kazakhstan 863-868 MHz", 863.0f, 868.0f, 30, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_NP_865, "NP_865", "Nepal 865-868 MHz", 865.0f, 868.0f, 30, true},
+    {meshtastic_Config_LoRaConfig_RegionCode_BR_902, "BR_902", "Brazil 902-907.5 MHz", 902.0f, 907.5f, 30, true},
     // Not in the radio daemon's region table (firmware 2.7.26): it falls back
-    // to 902-928 MHz and keeps transmitting.
-    {meshtastic_Config_LoRaConfig_RegionCode_EU_866, "EU_866", "Europe 865.6-867.6 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_EU_874, "EU_874", "Europe 874-874.4 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_EU_917, "EU_917", "Europe 917.4-919.4 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_EU_N_868, "EU_N_868", "Europe narrowband 868 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_CN, "CN", "China 470-510 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_EU_433, "EU_433", "Europe 433-434 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_UA_433, "UA_433", "Ukraine 433-434.7 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_MY_433, "MY_433", "Malaysia 433-435 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_PH_433, "PH_433", "Philippines 433-434.7 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_ANZ_433, "ANZ_433", "Australia / NZ 433-434.8 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_KZ_433, "KZ_433", "Kazakhstan 433-434.8 MHz", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_LORA_24, "LORA_24", "2.4 GHz worldwide", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_ITU1_2M, "ITU1_2M", "2 m amateur band, ITU region 1", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_ITU2_2M, "ITU2_2M", "2 m amateur band, ITU region 2", false},
-    {meshtastic_Config_LoRaConfig_RegionCode_ITU3_2M, "ITU3_2M", "2 m amateur band, ITU region 3", false},
+    // to its row for UNSET, 902-928 MHz, and keeps transmitting.
+    {meshtastic_Config_LoRaConfig_RegionCode_EU_866, "EU_866", "Europe 865.6-867.6 MHz", 902.0f, 928.0f, 30, false},
+    {meshtastic_Config_LoRaConfig_RegionCode_EU_874, "EU_874", "Europe 874-874.4 MHz", 902.0f, 928.0f, 30, false},
+    {meshtastic_Config_LoRaConfig_RegionCode_EU_917, "EU_917", "Europe 917.4-919.4 MHz", 902.0f, 928.0f, 30, false},
+    {meshtastic_Config_LoRaConfig_RegionCode_EU_N_868, "EU_N_868", "Europe narrowband 868 MHz", 902.0f, 928.0f, 30,
+     false},
+    {meshtastic_Config_LoRaConfig_RegionCode_CN, "CN", "China 470-510 MHz", 470.0f, 510.0f, 19, false},
+    {meshtastic_Config_LoRaConfig_RegionCode_EU_433, "EU_433", "Europe 433-434 MHz", 433.0f, 434.0f, 10, false},
+    {meshtastic_Config_LoRaConfig_RegionCode_UA_433, "UA_433", "Ukraine 433-434.7 MHz", 433.0f, 434.7f, 10, false},
+    {meshtastic_Config_LoRaConfig_RegionCode_MY_433, "MY_433", "Malaysia 433-435 MHz", 433.0f, 435.0f, 20, false},
+    {meshtastic_Config_LoRaConfig_RegionCode_PH_433, "PH_433", "Philippines 433-434.7 MHz", 433.0f, 434.7f, 10, false},
+    {meshtastic_Config_LoRaConfig_RegionCode_ANZ_433, "ANZ_433", "Australia / NZ 433-434.8 MHz", 433.05f, 434.79f, 14,
+     false},
+    {meshtastic_Config_LoRaConfig_RegionCode_KZ_433, "KZ_433", "Kazakhstan 433-434.8 MHz", 433.075f, 434.775f, 10,
+     false},
+    {meshtastic_Config_LoRaConfig_RegionCode_LORA_24, "LORA_24", "2.4 GHz worldwide", 2400.0f, 2483.5f, 10, false},
+    {meshtastic_Config_LoRaConfig_RegionCode_ITU1_2M, "ITU1_2M", "2 m amateur band, ITU region 1", 902.0f, 928.0f, 30,
+     false},
+    {meshtastic_Config_LoRaConfig_RegionCode_ITU2_2M, "ITU2_2M", "2 m amateur band, ITU region 2", 902.0f, 928.0f, 30,
+     false},
+    {meshtastic_Config_LoRaConfig_RegionCode_ITU3_2M, "ITU3_2M", "2 m amateur band, ITU region 3", 902.0f, 928.0f, 30,
+     false},
 };
 
 // What ? says about the region, on the LoRa page, in Setup and in the picker.
@@ -149,9 +162,9 @@ std::vector<Opt> region_opts(int current)
 
 // The presets the radio daemon shipped with MeshZero knows, with what each
 // stands for: bandwidth in kHz, spreading factor, coding rate 4/x. Taken from
-// modemPresetToParams() in the firmware's MeshRadio.h for that version. A
-// preset it does not know runs as LongFast there, so none of those (Lite,
-// Narrow, VeryLongSlow) are offered.
+// modemPresetToParams() in the firmware's MeshRadio.h for that version. It
+// runs a preset it doesn't know (Very long, Lite, Narrow) as LongFast, under
+// the name "Invalid", so none of those are offered.
 struct PresetInfo {
     int value;
     const char* name;
@@ -170,6 +183,14 @@ const PresetInfo kPresets[] = {
 };
 constexpr int kCustomModem = -1;
 
+bool known_preset(int preset)
+{
+    for (const PresetInfo& p : kPresets) {
+        if (p.value == preset) return true;
+    }
+    return false;
+}
+
 // What a preset stands for; LongFast for one the radio does not know, as there.
 const PresetInfo& preset_info(int preset)
 {
@@ -179,25 +200,146 @@ const PresetInfo& preset_info(int preset)
     return kPresets[0];
 }
 
-std::vector<Opt> modem_opts()
+// ---- what the radio daemon makes of the LoRa settings (firmware 2.7.26,
+// RadioInterface.cpp and MeshRadio.h), worked out the same way
+
+// Its row for a region: UNSET's for UNSET, and for a region it lacks.
+const RegionInfo& radio_region(int region)
+{
+    static const RegionInfo unset = {meshtastic_Config_LoRaConfig_RegionCode_UNSET, "UNSET", "", 902.0f, 928.0f, 30,
+                                     false};
+    for (const auto& r : kRegions) {
+        if (r.value == region) return r;
+    }
+    return unset;
+}
+
+// A bandwidth as stored, in kHz: bwCodeToKHz().
+float bw_khz(int code)
+{
+    switch (code) {
+        case 31: return 31.25f;
+        case 62: return 62.5f;
+        case 200: return 203.125f;
+        case 400: return 406.25f;
+        case 800: return 812.5f;
+        case 1600: return 1625.0f;
+        default: return static_cast<float>(code);
+    }
+}
+
+// The bandwidth a LoRa config runs on, in kHz.
+float lora_bw_khz(const meshtastic_Config_LoRaConfig& l)
+{
+    return l.use_preset ? static_cast<float>(preset_info(l.modem_preset).bw) : bw_khz(l.bandwidth);
+}
+
+// Whether a region's band holds a bandwidth. When it doesn't, the radio
+// falls back to LongFast.
+bool bw_fits(int region, float khz)
+{
+    const RegionInfo& r = radio_region(region);
+    return !(r.end - r.start < khz / 1000);
+}
+
+// How many frequency slots a region has at a bandwidth, in the radio's single
+// precision; at least 1.
+uint32_t slot_count(int region, float khz)
+{
+    if (khz <= 0 || !bw_fits(region, khz)) khz = 250.0f;  // LongFast, as the radio falls back to
+    const RegionInfo& r = radio_region(region);
+    const float n       = std::floor((r.end - r.start) / (0.0f + khz / 1000));
+    return n < 1 ? 1 : static_cast<uint32_t>(n);
+}
+
+// A slot past the last one wraps round to another; the radio is set to pick one itself instead.
+void fit_slot(meshtastic_Config_LoRaConfig& l)
+{
+    if (l.channel_num > slot_count(l.region, lora_bw_khz(l))) l.channel_num = 0;
+}
+
+// What the radio transmits with at most, in dBm, for an operator who is or
+// isn't licensed: the region's limit, which licensed operators may go past,
+// and never more than the SX1262's 22 dBm (SX126X_MAX_POWER, which MeshZero's
+// radio.yaml leaves at its default). It can go down to -9 dBm.
+constexpr int kRadioMinDbm = -9;
+constexpr int kRadioMaxDbm = 22;
+int power_cap(int region, bool licensed)
+{
+    return licensed ? kRadioMaxDbm : std::min(kRadioMaxDbm, radio_region(region).power);
+}
+
+// The bandwidths the SX1262 takes (RadioLib's SX126x::setBandwidth()), as
+// stored and as shown. With any other the radio is left set up wrong.
+struct Bandwidth {
+    int code;
+    const char* label;
+};
+const Bandwidth kBandwidths[] = {{7, "7.8 kHz"},   {10, "10.4 kHz"}, {15, "15.6 kHz"}, {20, "20.8 kHz"},
+                                 {31, "31.25 kHz"}, {41, "41.7 kHz"}, {62, "62.5 kHz"}, {125, "125 kHz"},
+                                 {250, "250 kHz"},  {500, "500 kHz"}};
+
+// The bandwidths the region holds, and the one in use when it isn't among
+// them, so that it shows by name.
+std::vector<Opt> bandwidth_opts(const meshtastic_Config_LoRaConfig& l)
+{
+    std::vector<Opt> opts;
+    const int current = l.use_preset ? preset_info(l.modem_preset).bw : l.bandwidth;
+    bool listed       = false;
+    for (const Bandwidth& b : kBandwidths) {
+        if (!bw_fits(l.region, bw_khz(b.code))) continue;
+        opts.push_back({b.code, b.label});
+        listed = listed || b.code == current;
+    }
+    if (!listed) {
+        std::string label = mhz_text(bw_khz(current)) + " kHz  not one this radio can use";
+        for (const Bandwidth& b : kBandwidths) {
+            if (b.code == current) label = std::string(b.label) + "  too wide for " + region_name(l.region);
+        }
+        opts.push_back({current, label});
+    }
+    return opts;
+}
+
+// The presets the region holds, the one in use, and Custom.
+std::vector<Opt> modem_opts(const meshtastic_Config_LoRaConfig& l)
 {
     std::vector<Opt> opts;
     for (const PresetInfo& p : kPresets) {
-        opts.push_back({p.value, std::string(p.name) + (p.value == kPresets[0].value ? "  (default)" : "")});
+        const bool fits = bw_fits(l.region, static_cast<float>(p.bw));
+        if (!fits && !(l.use_preset && l.modem_preset == p.value)) continue;
+        std::string label = p.name;
+        if (p.value == kPresets[0].value) label += "  (default)";
+        if (!fits) label += "  too wide for " + region_name(l.region);
+        opts.push_back({p.value, label});
+    }
+    if (l.use_preset && !known_preset(l.modem_preset)) {
+        opts.push_back({l.modem_preset, modem_preset_name(l.modem_preset) + "  runs as LongFast"});
     }
     opts.push_back({kCustomModem, "Custom"});
     return opts;
 }
 
+// The coding rate a preset runs on, given what the radio has. The radio
+// uses a coding rate stored next to a preset, when it is 5-8, instead of the
+// preset's own (RadioInterface::applyModemConfig()); saving sends the
+// preset's own, so that holds only for the preset the radio is on.
+int preset_cr(const meshtastic_Config_LoRaConfig& l, const meshtastic_Config_LoRaConfig& radio)
+{
+    const bool same = radio.use_preset && radio.modem_preset == l.modem_preset;
+    if (same && radio.coding_rate >= 5 && radio.coding_rate <= 8) return radio.coding_rate;
+    return preset_info(l.modem_preset).cr;
+}
+
 // Moves a working copy from a preset to modem values of its own, starting
-// from the ones the preset stood for.
-void make_custom(meshtastic_Config_LoRaConfig& l)
+// from the ones in use.
+void make_custom(meshtastic_Config_LoRaConfig& l, const meshtastic_Config_LoRaConfig& radio)
 {
     if (!l.use_preset) return;
     const PresetInfo& p = preset_info(l.modem_preset);
     l.bandwidth         = static_cast<decltype(l.bandwidth)>(p.bw);
     l.spread_factor     = static_cast<decltype(l.spread_factor)>(p.sf);
-    l.coding_rate       = static_cast<decltype(l.coding_rate)>(p.cr);
+    l.coding_rate       = static_cast<decltype(l.coding_rate)>(preset_cr(l, radio));
     l.use_preset        = false;
 }
 
@@ -269,18 +411,28 @@ std::unique_ptr<Screen> page_user(App& app)
 // own slot. What the user set in the same edit is theirs and stays.
 meshtastic_Config_LoRaConfig lora_cleaned(const meshtastic_Config_LoRaConfig& before, meshtastic_Config_LoRaConfig l)
 {
+    // A bandwidth wider than the region's band makes the radio fall back to LongFast.
+    if (!bw_fits(l.region, lora_bw_khz(l))) {
+        l.use_preset   = true;
+        l.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
+    }
     const bool region_changed = l.region != before.region;
     const bool to_preset      = l.use_preset && (!before.use_preset || l.modem_preset != before.modem_preset);
     if (l.use_preset) {
-        l.bandwidth     = 0;
-        l.spread_factor = 0;
-        l.coding_rate   = 0;
+        // The preset's own values, as the radio fills them in when it starts.
+        // The coding rate matters: the radio would save 0 as 5, and then run a
+        // preset on a stored 5-8 instead of its own rate.
+        const PresetInfo& p = preset_info(l.modem_preset);
+        l.bandwidth         = static_cast<decltype(l.bandwidth)>(p.bw);
+        l.spread_factor     = static_cast<decltype(l.spread_factor)>(p.sf);
+        l.coding_rate       = static_cast<decltype(l.coding_rate)>(p.cr);
     }
     if (region_changed || to_preset) {
         if (l.override_frequency == before.override_frequency) l.override_frequency = 0;
         if (l.frequency_offset == before.frequency_offset) l.frequency_offset = 0;
     }
     if ((region_changed || to_preset) && l.channel_num == before.channel_num) l.channel_num = 0;
+    fit_slot(l);
     // One outside the region's band stays: the user agreed to it when they set
     // it, or the radio already runs on it. One the radio cannot tune to does not go to it.
     if (l.override_frequency != 0 && (l.override_frequency < kRadioMinMHz || l.override_frequency > kRadioMaxMHz)) {
@@ -322,6 +474,8 @@ std::unique_ptr<Screen> page_lora(App& app)
 {
     auto cfg    = std::make_shared<meshtastic_Config_LoRaConfig>(app.mesh.config.lora);
     auto before = std::make_shared<meshtastic_Config_LoRaConfig>(app.mesh.config.lora);
+    const meshtastic_NodeInfo* self = app.mesh.me();
+    const bool licensed             = self && self->has_user && self->user.is_licensed;
     std::vector<Field> f;
     f.push_back(f_enum(
         "Region", [cfg]() { return static_cast<int64_t>(cfg->region); },
@@ -329,41 +483,76 @@ std::unique_ptr<Screen> page_lora(App& app)
             const auto region = static_cast<Region>(v);
             if (region == cfg->region) return;
             cfg->region = region;
+            std::string changed;
             // A fixed frequency outside the new band was never agreed to for this region.
             if (cfg->override_frequency != 0 && !in_band(region, cfg->override_frequency)) {
                 cfg->override_frequency = 0;
-                app.toast("Fixed frequency cleared: outside " + region_name(region));
+                changed = "Fixed frequency cleared";
+            }
+            // The radio would fall back to LongFast; show it here.
+            if (!bw_fits(region, lora_bw_khz(*cfg))) {
+                cfg->use_preset   = true;
+                cfg->modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
+                changed += std::string(changed.empty() ? "" : ", ") + "modem set to LongFast";
+            }
+            fit_slot(*cfg);
+            if (!changed.empty()) {
+                changed[0] = static_cast<char>(toupper(static_cast<unsigned char>(changed[0])));
+                app.toast(changed + " for " + region_name(region));
             }
         },
         region_opts(cfg->region), "Required to transmit"));
     f.back().about = kRegionAbout;
     // One row says what the radio runs on: a preset, or values of its own.
     f.push_back(f_enum(
-        "Modem", [cfg]() { return static_cast<int64_t>(cfg->use_preset ? preset_info(cfg->modem_preset).value : kCustomModem); },
-        [cfg](int64_t v) {
+        "Modem", [cfg]() { return cfg->use_preset ? static_cast<int64_t>(cfg->modem_preset) : kCustomModem; },
+        [cfg, before](int64_t v) {
             if (v == kCustomModem) {
-                make_custom(*cfg);
+                make_custom(*cfg, *before);
                 return;
             }
             cfg->modem_preset = static_cast<meshtastic_Config_LoRaConfig_ModemPreset>(v);
             cfg->use_preset   = true;
+            fit_slot(*cfg);
         },
-        modem_opts(), "Must match the rest of the mesh"));
+        {}, "Must match the rest of the mesh"));
+    f.back().opts_of = [cfg]() { return modem_opts(*cfg); };
     // A fixed frequency is set far down the page; say so where the modem is named.
     f.back().note  = [cfg]() { return std::string(cfg->override_frequency != 0 ? ", fixed freq" : ""); };
     f.back().about = "How the radio trades speed for range. Slower presets reach further but take longer to send. "
-                     "Nodes only hear each other on the same one. Custom uses the values below.";
-    f.push_back(MZ_INT("Hop limit", hop_limit, 1, 7, "hops", "Default 3"));
+                     "Nodes only hear each other on the same one. Custom uses the values below. Presets too wide "
+                     "for the region's band aren't offered.";
+    f.push_back(MZ_INT("Hop limit", hop_limit, 0, 7, "hops", "Default 3. 0 = direct neighbors only"));
     f.back().about = "How many times your messages may be relayed on their way. More reaches further but adds "
-                     "traffic to the mesh. 3 suits most meshes.";
+                     "traffic to the mesh. 3 suits most meshes; 0 reaches only nodes in direct range.";
     f.push_back(MZ_BOOL("Transmit enabled", tx_enabled, ""));
     f.back().about = "When off, the radio only listens: it doesn't send your messages or relay other nodes'.";
-    f.push_back(MZ_INT("Transmit power", tx_power, 0, 30, "dBm", "0 = region maximum"));
-    f.back().about = "How strongly the radio transmits. 0 uses the most the region allows; higher values are capped "
-                     "to that unless you're a licensed operator.";
-    f.push_back(MZ_INT("Frequency slot", channel_num, 0, 250, "", "0 = automatic"));
+    f.push_back(MZ_INT("Transmit power", tx_power, kRadioMinDbm, kRadioMaxDbm, "dBm", ""));
+    f.back().bounds = [cfg, licensed](int64_t&, int64_t& hi) { hi = power_cap(cfg->region, licensed); };
+    // The radio saves what it makes of 0 when it starts, the region's limit,
+    // which reads back as that or more.
+    f.back().value_text = [cfg, licensed](int64_t v) {
+        const int region_max = power_cap(cfg->region, false);
+        const int cap        = power_cap(cfg->region, licensed);
+        if (v == 0 && region_max < cap) return "region max (" + std::to_string(region_max) + " dBm)";
+        if (v == 0 || v >= cap) return "max (" + std::to_string(cap) + " dBm)";
+        return std::string();
+    };
+    f.back().help_text = [cfg]() {
+        return "0 = region maximum (" + std::to_string(power_cap(cfg->region, false)) + " dBm)";
+    };
+    f.back().about = "How strongly the radio transmits, from -9 dBm up to the region's limit, and at most 22 dBm, "
+                     "this radio's maximum. 0 uses the most allowed. Licensed operators may go past the region's "
+                     "limit.";
+    f.push_back(MZ_INT("Frequency slot", channel_num, 0, 0, "", ""));
+    f.back().bounds    = [cfg](int64_t&, int64_t& hi) { hi = slot_count(cfg->region, lora_bw_khz(*cfg)); };
+    f.back().help_text = [cfg]() {
+        const uint32_t n = slot_count(cfg->region, lora_bw_khz(*cfg));
+        return "0 = automatic, " + (n == 1 ? std::string("1") : "1-" + std::to_string(n));
+    };
     f.back().about = "Which frequency in the region's band the radio uses. 0 picks it from the primary channel's "
-                     "name, as other nodes do. Set a number only to match a mesh that uses one.";
+                     "name, as other nodes do. Set a number only to match a mesh that uses one. How many there are "
+                     "depends on the region and bandwidth.";
     f.push_back(MZ_BOOL("RX boosted gain", sx126x_rx_boosted_gain, ""));
     f.back().about = "Makes the receiver more sensitive, to hear weaker signals, for slightly more power use.";
     f.push_back(MZ_BOOL("Override duty cycle", override_duty_cycle, "May be illegal in your region"));
@@ -378,32 +567,44 @@ std::unique_ptr<Screen> page_lora(App& app)
     // These show what is in use, the preset's values included. Changing one
     // makes the modem Custom, starting from what was there.
     f.push_back(f_header("Modem values"));
-    f.push_back(f_int(
+    f.push_back(f_enum(
         "Bandwidth", [cfg]() { return static_cast<int64_t>(cfg->use_preset ? preset_info(cfg->modem_preset).bw : cfg->bandwidth); },
-        [cfg](int64_t v) {
-            make_custom(*cfg);
+        [cfg, before](int64_t v) {
+            make_custom(*cfg, *before);
             cfg->bandwidth = static_cast<decltype(cfg->bandwidth)>(v);
+            fit_slot(*cfg);
         },
-        7, 1600, "kHz", "Changing it makes the modem Custom. 62 = 62.5, 31 = 31.25"));
-    f.back().about = "How wide a slice of the band each message takes. Wider sends faster but reaches less far. "
-                     "Every node must use the same.";
+        {}, "Changing it makes the modem Custom"));
+    f.back().opts_of = [cfg]() { return bandwidth_opts(*cfg); };
+    f.back().about   = "How wide a slice of the band each message takes. Wider sends faster but reaches less far. "
+                       "Every node must use the same. Only widths this radio takes and the region's band holds are "
+                       "offered.";
     f.push_back(f_int(
         "Spreading factor",
         [cfg]() { return static_cast<int64_t>(cfg->use_preset ? preset_info(cfg->modem_preset).sf : cfg->spread_factor); },
-        [cfg](int64_t v) {
-            make_custom(*cfg);
+        [cfg, before](int64_t v) {
+            make_custom(*cfg, *before);
             cfg->spread_factor = static_cast<decltype(cfg->spread_factor)>(v);
         },
         5, 12, "", "Changing it makes the modem Custom. 5-12"));
     f.back().about = "How drawn out each message is. Higher reaches further but takes longer to send. Every node "
                      "must use the same.";
     f.push_back(f_int(
-        "Coding rate", [cfg]() { return static_cast<int64_t>(cfg->use_preset ? preset_info(cfg->modem_preset).cr : cfg->coding_rate); },
-        [cfg](int64_t v) {
-            make_custom(*cfg);
+        "Coding rate",
+        [cfg, before]() { return static_cast<int64_t>(cfg->use_preset ? preset_cr(*cfg, *before) : cfg->coding_rate); },
+        [cfg, before](int64_t v) {
+            make_custom(*cfg, *before);
             cfg->coding_rate = static_cast<decltype(cfg->coding_rate)>(v);
         },
-        5, 8, "", "Changing it makes the modem Custom. 5-8 (4/5 to 4/8)"));
+        5, 8, "", ""));
+    f.back().help_text = [cfg, before]() {
+        const int own = preset_info(cfg->modem_preset).cr;
+        if (cfg->use_preset && preset_cr(*cfg, *before) != own) {
+            return "The radio uses 4/" + std::to_string(preset_cr(*cfg, *before)) + "; saving sets the preset's 4/" +
+                   std::to_string(own);
+        }
+        return std::string("Changing it makes the modem Custom. 5-8 (4/5 to 4/8)");
+    };
     f.back().about = "How much error correction each message carries. Higher copes better with interference but "
                      "takes longer to send.";
     // The region's band is what is suggested; outside it the user is warned
@@ -959,7 +1160,7 @@ std::string preset_label(int preset)
     for (const PresetInfo& p : kPresets) {
         if (p.value == preset) return p.name;
     }
-    return "preset " + std::to_string(preset) + " (runs as LongFast)";
+    return modem_preset_name(preset) + " (runs as LongFast)";
 }
 
 // The radio settings a shared link carries, in a few words.
