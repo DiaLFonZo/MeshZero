@@ -35,6 +35,10 @@ NODES = [
     (0xA1B2C308, "F0X", "Fox Hunter", "SEEED_XIAO_S3", None, 3, 0, 12, True),
 ]
 
+# Heard on the mesh but missing from the radio's node list, as when its node
+# info was lost: it only shows by number until it is asked (--stranger).
+STRANGER = (0xA1B2C309, "GUS", "Gus Pocket", "HELTEC_V3", None, 1, 0, 80, True)
+
 CHATTER = [
     (0xA1B2C301, "Good morning mesh!"),
     (0xA1B2C302, "Morning Anna. Anyone near the harbour today?"),
@@ -199,7 +203,7 @@ class Radio:
     def on_packet(self, packet):
         port = packet.decoded.portnum
         dest = packet.to
-        known = {n[0]: n for n in NODES}
+        known = {n[0]: n for n in NODES + ([STRANGER] if self.args.stranger else [])}
         if port == portnums_pb2.ADMIN_APP:
             self.on_admin(packet)
             return
@@ -301,6 +305,12 @@ class Radio:
         self.deliver(MY_NUM, MY_NUM, portnums_pb2.TELEMETRY_APP, stats.SerializeToString())
         self.deliver(0xA1B2C302, MY_NUM, portnums_pb2.TEXT_MESSAGE_APP, b"Hey, are you bringing the antenna tonight?",
                      delay=1.0, pki=True)
+        if self.args.stranger:
+            time.sleep(2.0)
+            self.deliver(STRANGER[0], BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, b"First time on this mesh, hello!",
+                         hops=STRANGER[5])
+            self.deliver(STRANGER[0], MY_NUM, portnums_pb2.TEXT_MESSAGE_APP, b"Can you hear me?", hops=STRANGER[5],
+                         delay=1.0)
 
     def serve(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -355,6 +365,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-region", action="store_true", help="start with the LoRa region unset")
     parser.add_argument("--ignore-nodeinfo", type=int, default=0, metavar="N",
                         help="leave the first N node info requests unanswered")
+    parser.add_argument("--stranger", action="store_true",
+                        help="a node missing from the node list posts on the channel and sends a direct message")
     parser.add_argument("--chatter-delay", type=float, default=2.0)
     parser.add_argument("--chatter-gap", type=float, default=0.7)
     Radio(parser.parse_args()).serve()
