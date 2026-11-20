@@ -935,6 +935,37 @@ void pick_community_setup(App* a)
     }));
 }
 
+// Asks for a channel link, and what to do with what it contains.
+void add_from_link(App* a)
+{
+    a->push(make_input(*a, "Add channels", "", 400, "Enter a meshtastic.org/e/# link", [a](const std::string& text) {
+        meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+        const std::string error   = parse_channel_url(trim(text), set);
+        if (!error.empty()) {
+            a->toast(error, true);
+            return false;
+        }
+        a->pop();  // this page; the question takes its place
+        offer_channels(a, trim(text));
+        return false;
+    }));
+}
+
+// Opens the camera, and asks before adding what a channel code contains.
+void scan_channel_code(App* a)
+{
+    a->push(make_scanner(*a, LV_SYMBOL_LEFT " Scan channel code", [a](const std::string& text) {
+        meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
+        if (!parse_channel_url(text, set).empty()) {
+            a->toast("Not a channel code", true);
+            return false;
+        }
+        a->pop();  // the camera view
+        offer_channels(a, text);
+        return true;
+    }));
+}
+
 std::unique_ptr<Screen> page_channel(App& app, int index)
 {
     auto cfg = std::make_shared<meshtastic_Channel>(app.mesh.channels[index]);
@@ -1058,23 +1089,6 @@ public:
             }
             items.push_back(it);
         }
-        const auto action = [&items](const std::string& text) {
-            ui::ListItem it;
-            it.text      = text;
-            it.has_color = true;
-            it.color     = ui::c_accent();
-            items.push_back(it);
-        };
-        action(LV_SYMBOL_IMAGE "  Share all (QR code)");
-        action(LV_SYMBOL_PLUS "  Add from URL");
-        // Only on models that have a camera.
-        scan_index_ = -1;
-        if (Camera::available()) {
-            scan_index_ = static_cast<int>(items.size());
-            action(LV_SYMBOL_EYE_OPEN "  Scan QR code");
-        }
-        community_index_ = static_cast<int>(items.size());
-        action(LV_SYMBOL_LIST "  Community setups (experimental)");
         list_->set_items(items);
     }
 
@@ -1083,53 +1097,12 @@ public:
         if (list_->handle_key(key)) return true;
         if (key.k != K::Enter) return false;
         const int i = list_->selected();
-        if (i < kMaxChannels) {
-            app.push(page_channel(app, i));
-        } else if (i == kMaxChannels) {
-            app.push(make_qr(app, "Share channels", channel_url(mesh, -1)));
-        } else if (i == scan_index_) {
-            scan();
-        } else if (i == community_index_) {
-            pick_community_setup(&app);
-        } else {
-            App* a = &app;
-            app.push(make_input(app, "Add channels", "", 400,
-                                "Enter a meshtastic.org/e/# link",
-                                [a](const std::string& text) {
-                                    meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
-                                    const std::string error   = parse_channel_url(trim(text), set);
-                                    if (!error.empty()) {
-                                        a->toast(error, true);
-                                        return false;
-                                    }
-                                    a->pop();  // this page; the question takes its place
-                                    offer_channels(a, trim(text));
-                                    return false;
-                                }));
-        }
+        if (i < kMaxChannels) app.push(page_channel(app, i));
         return true;
     }
 
 private:
-    // Opens the camera, and asks before adding what a channel code contains.
-    void scan()
-    {
-        App* a = &app;
-        app.push(make_scanner(app, LV_SYMBOL_LEFT " Scan channel code", [a](const std::string& text) {
-            meshtastic_ChannelSet set = meshtastic_ChannelSet_init_zero;
-            if (!parse_channel_url(text, set).empty()) {
-                a->toast("Not a channel code", true);
-                return false;
-            }
-            a->pop();  // the camera view
-            offer_channels(a, text);
-            return true;
-        }));
-    }
-
     std::unique_ptr<ui::ListView> list_;
-    int scan_index_      = -1;
-    int community_index_ = -1;
 };
 
 // ---------------------------------------------------------- region picker
@@ -1233,6 +1206,15 @@ public:
                 a->push(page(*a));
             };
         };
+        const auto when_ready = [a](std::function<void()> fn) {
+            return [a, fn]() {
+                if (!a->mesh.ever_ready()) {
+                    a->toast("Radio offline", true);
+                    return;
+                }
+                fn();
+            };
+        };
 
         header("Radio");
         entry("Region", region_name(mesh.config.lora.region), [a]() { a->push(make_region_picker(*a, false)); });
@@ -1241,6 +1223,12 @@ public:
         int enabled = 0;
         for (int i = 0; i < kMaxChannels; ++i) enabled += mesh.channel_enabled(i) ? 1 : 0;
         entry("Channels", std::to_string(enabled) + " of 8", [a]() { a->push(make_channels(*a)); });
+        entry("Share channels (QR code)", "",
+              when_ready([a]() { a->push(make_qr(*a, "Share channels", channel_url(a->mesh, -1))); }));
+        entry("Add channels from URL", "", when_ready([a]() { add_from_link(a); }));
+        // Only on models that have a camera.
+        if (Camera::available()) entry("Scan channel QR code", "", when_ready([a]() { scan_channel_code(a); }));
+        entry("Community setups", "experimental", when_ready([a]() { pick_community_setup(a); }));
         header("This node");
         entry("Your node", mesh.long_name(mesh.my_num), open(page_user));
         entry("Device", role_name(mesh.config.device.role), open(page_device));
