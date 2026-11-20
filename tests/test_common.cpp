@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -192,6 +194,44 @@ static void test_history()
     CHECK(!msgs.empty() && msgs.back().text == "filler message number 19");
     unlink(path.c_str());
     unlink((path + ".1").c_str());
+
+    // Deleting one conversation keeps the others, and drops its acknowledgements.
+    {
+        HistoryWriter w(path);
+        const auto msg = [](uint32_t id, uint32_t from, uint32_t to, uint8_t channel, bool outgoing, const char* text) {
+            StoredMsg m;
+            m.id       = id;
+            m.from     = from;
+            m.to       = to;
+            m.channel  = channel;
+            m.outgoing = outgoing;
+            m.ack      = outgoing ? AckState::Pending : AckState::None;
+            m.text     = text;
+            return m;
+        };
+        w.append(msg(1, 0x11, kBroadcast, 0, false, "on the primary channel"));
+        w.append(msg(2, 0x99, 0x22, 0, true, "to 22"));
+        w.append(msg(3, 0x22, 0x99, 0, false, "from 22"));
+        w.append(msg(4, 0x99, kBroadcast, 1, true, "on channel 1"));
+        w.append_ack(2, AckState::Acked, 0);
+        w.append_ack(4, AckState::Implicit, 0);
+    }
+    const auto with = [](uint32_t peer) {
+        return [peer](const StoredMsg& m) { return m.to != kBroadcast && (m.outgoing ? m.to : m.from) == peer; };
+    };
+    CHECK(history_remove(with(0x22), path));
+    msgs = history_load(path);
+    CHECK(msgs.size() == 2 && msgs[0].text == "on the primary channel" && msgs[1].text == "on channel 1");
+    CHECK(msgs.size() == 2 && msgs[1].ack == AckState::Implicit);
+    {
+        std::ifstream in(path);
+        const std::string all((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK(all.find("A\t2\t") == std::string::npos);
+    }
+    CHECK(history_remove([](const StoredMsg&) { return true; }, path));
+    CHECK(history_load(path).empty());
+    CHECK(history_remove([](const StoredMsg&) { return true; }, path + ".missing"));
+    unlink(path.c_str());
     rmdir(dir);
 }
 

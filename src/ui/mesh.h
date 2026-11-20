@@ -121,6 +121,10 @@ public:
     Chat& chat(const ChatKey& key);
     void set_active_chat(const ChatKey* key);
     void mark_read(const ChatKey& key);
+    // Deletes the messages of one conversation, or of all, here and in the
+    // history the service keeps.
+    void delete_history(const ChatKey& key);
+    void delete_all_history();
     bool send_text(const ChatKey& key, const std::string& text, uint32_t reply_id = 0);
     // Reacts to the message with this packet id with an emoji.
     bool send_tapback(const ChatKey& key, uint32_t target_id, const std::string& emoji);

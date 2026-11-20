@@ -197,6 +197,33 @@ void migrate_background()
     if (was_on) logf("running in the background is now off until the user turns it back on");
 }
 
+// Deletes the stored messages of one conversation, or of all of them, as the
+// app asks: "c<channel index>", "d<node number>" or "all". The app works out
+// conversations the same way when it loads the history.
+void clear_history(const std::string& which)
+{
+    std::function<bool(const StoredMsg&)> drop;
+    if (which == "all") {
+        drop = [](const StoredMsg&) { return true; };
+    } else if (which.size() > 1 && (which[0] == 'c' || which[0] == 'd')) {
+        char* end              = nullptr;
+        const unsigned long id = strtoul(which.c_str() + 1, &end, 10);
+        if (*end != 0) return;
+        const bool dm = which[0] == 'd';
+        drop          = [dm, id](const StoredMsg& m) {
+            if (m.to == kBroadcast) return !dm && m.channel == id;
+            return dm && (m.outgoing ? m.to : m.from) == id;
+        };
+    } else {
+        return;
+    }
+    if (history_remove(drop)) {
+        logf("deleted the message history of %s", which.c_str());
+    } else {
+        logf("cannot rewrite %s: %s", history_path().c_str(), strerror(errno));
+    }
+}
+
 class Proxy {
 public:
     Proxy(std::string upstream_host, uint16_t upstream_port, std::string bind_addr, uint16_t listen_port)
@@ -922,6 +949,10 @@ void Proxy::send_control(Client& c)
 void Proxy::on_control(Client& c, const std::string& request)
 {
     c.wants_control = true;
+    if (request.rfind("clear=", 0) == 0) {
+        clear_history(request.substr(6));
+        return;
+    }
     if (request == "net=1" || request == "net=0") {
         const bool on = request == "net=1";
         if (!write_network_access(on)) logf("cannot save %s: %s", access_path().c_str(), strerror(errno));

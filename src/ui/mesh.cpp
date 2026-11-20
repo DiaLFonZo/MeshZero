@@ -189,6 +189,27 @@ void Mesh::send_control(const std::string& request)
     send_to_radio(msg);
 }
 
+void Mesh::delete_history(const ChatKey& key)
+{
+    send_control("clear=" + std::string(key.dm ? "d" : "c") + std::to_string(key.id));
+    Chat& c   = chat(key);
+    c.msgs.clear();
+    c.unread  = 0;
+    c.last_ts = 0;
+    ++rev_chats;
+}
+
+void Mesh::delete_all_history()
+{
+    send_control("clear=all");
+    for (auto& [key, c] : chats) {
+        c.msgs.clear();
+        c.unread  = 0;
+        c.last_ts = 0;
+    }
+    ++rev_chats;
+}
+
 void Mesh::set_background(bool on)
 {
     send_control(on ? "bg=1" : "bg=0");
