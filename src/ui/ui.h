@@ -22,6 +22,17 @@ lv_color_t c_error();
 lv_color_t c_me();
 lv_color_t node_color(uint32_t num);
 
+// The accent colours to choose from, in rainbow order. All are light enough
+// for dark text on them, as on the selected tab.
+struct Accent {
+    const char* name;  // shown, and how the choice is saved
+    uint32_t rgb;
+};
+const std::vector<Accent>& accents();
+// The accent in use, as an index into accents(); saved for the next start.
+size_t accent_index();
+void set_accent(size_t index);
+
 const lv_font_t* font();
 const lv_font_t* font_small();
 

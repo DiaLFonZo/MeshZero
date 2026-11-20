@@ -1175,6 +1175,48 @@ private:
     std::vector<const RegionInfo*> shown_;  // what each row stands for
 };
 
+// ------------------------------------------------------------ accent color
+
+// Each colour is shown in itself. Pages take a new accent when they are next
+// drawn, which for Setup is right away.
+class AccentScreen : public Screen {
+public:
+    explicit AccentScreen(App& a) : Screen(a)
+    {
+        list_ = std::make_unique<ui::ListView>(root, 0, 0, kContentW, kContentH);
+        std::vector<ui::ListItem> items;
+        for (size_t i = 0; i < ui::accents().size(); ++i) {
+            const ui::Accent& c = ui::accents()[i];
+            ui::ListItem it;
+            it.text      = c.name;
+            it.has_color = true;
+            it.color     = lv_color_hex(c.rgb);
+            if (i == ui::accent_index()) {
+                it.right           = LV_SYMBOL_OK;
+                it.has_right_color = true;
+                it.right_color     = it.color;
+            }
+            items.push_back(it);
+        }
+        list_->set_items(items);
+        list_->select(static_cast<int>(ui::accent_index()));
+    }
+    std::string title() const override { return LV_SYMBOL_LEFT " Accent color"; }
+    std::string hint() const override { return "Up/Down choose   Enter select   Esc back"; }
+
+    bool on_key(const Key& key) override
+    {
+        if (list_->handle_key(key)) return true;
+        if (key.k != K::Enter) return false;
+        ui::set_accent(static_cast<size_t>(list_->selected()));
+        app.pop();
+        return true;
+    }
+
+private:
+    std::unique_ptr<ui::ListView> list_;
+};
+
 // -------------------------------------------------------------- setup tab
 
 class SetupScreen : public Screen {
@@ -1270,6 +1312,9 @@ public:
         entry("Neighbor info", mesh.modules.neighbor_info.enabled ? "on" : "off", open(page_neighbor));
         entry("Store & forward", mesh.modules.store_forward.enabled ? "on" : "off", open(page_store_forward));
         entry("Range test", mesh.modules.range_test.enabled ? "on" : "off", open(page_range_test));
+        header("Appearance");
+        entry("Accent color", ui::accents()[ui::accent_index()].name,
+              [a]() { a->push(std::make_unique<AccentScreen>(*a)); });
         header("Maintenance");
         entry("Restart radio", "", [a, m]() {
             a->push(make_confirm(*a, "Restart radio", "Restart the radio?",

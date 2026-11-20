@@ -90,7 +90,6 @@ void App::start()
     lv_obj_set_style_pad_left(notice_, 5, 0);
     lv_obj_set_style_pad_top(notice_, 2, 0);
     lv_label_set_long_mode(notice_, LV_LABEL_LONG_DOT);
-    ui::set_bg(notice_, ui::c_accent());
     lv_obj_add_flag(notice_, LV_OBJ_FLAG_HIDDEN);
 
     push(make_tab(*this, kTabChats));
@@ -242,6 +241,7 @@ void App::toast(const std::string& text, bool warn)
 void App::notify(const std::string& text)
 {
     ui::set_text(notice_, ui::clean(utf8_truncate(text, 120), true));
+    ui::set_bg(notice_, ui::c_accent());
     lv_obj_remove_flag(notice_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(notice_);
     notice_until_ = now_ms() + 4000;
