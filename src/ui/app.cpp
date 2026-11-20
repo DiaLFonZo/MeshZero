@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ui/app.h"
 
+#include <cstdlib>
 #include <ctime>
 
 #include "common/util.h"
@@ -278,7 +279,7 @@ void App::update_chrome()
         ui::set_text(title_, ui::clean(s->title(), true));
     }
 
-    // Right side: link state, satellites, clock.
+    // Right side: link state, satellites, battery, clock.
     std::string status;
     lv_color_t color = ui::c_dim();
     switch (mesh.state()) {
@@ -300,8 +301,17 @@ void App::update_chrome()
     if (status.empty()) {
         const meshtastic_NodeInfo* self = mesh.me();
         if (self && self->has_position && self->position.sats_in_view > 0) {
-            status += std::string(LV_SYMBOL_GPS) + std::to_string(self->position.sats_in_view) + "  ";
+            status += std::string(LV_SYMBOL_GPS) + std::to_string(self->position.sats_in_view) + " ";
         }
+        // The fuel gauge moves slowly; a look every 15 s is plenty. Single
+        // spaces leave room for the tabs.
+        const uint64_t now = now_ms();
+        if (battery_read_ms_ == 0 || now - battery_read_ms_ >= 15000) {
+            battery_read_ms_ = now;
+            const char* dir  = getenv("MESHZERO_POWER_SUPPLY_DIR");
+            battery_         = dir && dir[0] ? battery_percent(charging_, dir) : battery_percent(charging_);
+        }
+        if (battery_ >= 0) status += (charging_ ? LV_SYMBOL_CHARGE : "") + std::to_string(battery_) + "% ";
         const time_t t = time(nullptr);
         tm local{};
         localtime_r(&t, &local);

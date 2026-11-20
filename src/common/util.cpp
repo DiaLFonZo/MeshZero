@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "common/util.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 
+#include <dirent.h>
 #include <sys/stat.h>
 
 namespace mz {
@@ -245,6 +248,35 @@ const char* compass_point(double bearing_deg)
 {
     static const char* pts[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
     return pts[static_cast<int>((bearing_deg + 22.5) / 45.0) & 7];
+}
+
+int battery_percent(bool& charging, const std::string& root)
+{
+    charging = false;
+    DIR* dir = opendir(root.c_str());
+    if (!dir) return -1;
+    std::vector<std::string> names;
+    while (const dirent* e = readdir(dir)) {
+        if (e->d_name[0] != '.') names.push_back(e->d_name);
+    }
+    closedir(dir);
+    std::sort(names.begin(), names.end());
+    const auto read = [&root](const std::string& name, const char* file) {
+        std::ifstream in(root + "/" + name + "/" + file);
+        std::string line;
+        std::getline(in, line);
+        return trim(line);
+    };
+    for (const std::string& name : names) {
+        if (read(name, "type") != "Battery" || read(name, "scope") == "Device") continue;
+        const std::string text = read(name, "capacity");
+        char* end              = nullptr;
+        const long percent     = strtol(text.c_str(), &end, 10);
+        if (text.empty() || *end != 0 || percent < 0 || percent > 100) continue;
+        charging = read(name, "status") == "Charging";
+        return static_cast<int>(percent);
+    }
+    return -1;
 }
 
 }  // namespace mz

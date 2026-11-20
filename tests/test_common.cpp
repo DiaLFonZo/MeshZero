@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "common/history.h"
@@ -100,6 +101,34 @@ static void test_util()
     const double b = geo_bearing_deg(52.0, 4.0, 52.0, 5.0);
     CHECK(b > 85 && b < 95);
     CHECK(std::string(compass_point(b)) == "E");
+}
+
+static void test_battery()
+{
+    char tmpl[] = "/tmp/mzbatXXXXXX";
+    const char* dir = mkdtemp(tmpl);
+    CHECK(dir != nullptr);
+    if (!dir) return;
+    const std::string root = dir;
+    const auto supply = [&root](const std::string& name, std::vector<std::pair<std::string, std::string>> files) {
+        mkdir((root + "/" + name).c_str(), 0755);
+        for (const auto& [file, text] : files) {
+            FILE* f = fopen((root + "/" + name + "/" + file).c_str(), "w");
+            fputs(text.c_str(), f);
+            fclose(f);
+        }
+    };
+    bool charging = true;
+    CHECK(battery_percent(charging, root + "/missing") == -1 && !charging);
+    supply("AC", {{"type", "Mains\n"}, {"online", "1\n"}});
+    supply("a-controller", {{"type", "Battery\n"}, {"scope", "Device\n"}, {"capacity", "100\n"}, {"status", "Full\n"}});
+    CHECK(battery_percent(charging, root) == -1);
+    supply("bq27220-0", {{"type", "Battery\n"}, {"capacity", "76\n"}, {"status", "Charging\n"}});
+    CHECK(battery_percent(charging, root) == 76 && charging);
+    supply("bq27220-0", {{"status", "Discharging\n"}});
+    CHECK(battery_percent(charging, root) == 76 && !charging);
+    supply("bq27220-0", {{"capacity", "\n"}});
+    CHECK(battery_percent(charging, root) == -1);
 }
 
 static void test_history()
@@ -235,6 +264,7 @@ int main()
     test_proto_roundtrip();
     test_base64();
     test_util();
+    test_battery();
     test_history();
     test_qr();
     if (failures == 0) printf("all tests passed\n");

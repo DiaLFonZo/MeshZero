@@ -67,4 +67,9 @@ double geo_bearing_deg(double lat1, double lon1, double lat2, double lon2);
 std::string distance_str(double metres);
 const char* compass_point(double bearing_deg);
 
+// The charge of this device's battery in percent, as the kernel reports it
+// under `root`, or -1 when it has none. Batteries of accessories, such as a
+// game controller, are not this device's. `charging` says whether it is charging.
+int battery_percent(bool& charging, const std::string& root = "/sys/class/power_supply");
+
 }  // namespace mz

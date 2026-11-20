@@ -99,6 +99,9 @@ private:
     bool quit_          = false;
     bool region_prompted_ = false;
     bool background_prompted_ = false;
+    int battery_ = -1;              // percent, -1 without a battery
+    bool charging_ = false;
+    uint64_t battery_read_ms_ = 0;  // when it was last read, 0 if never
 };
 
 // ---- screen factories (src/ui/screens) ------------------------------------
