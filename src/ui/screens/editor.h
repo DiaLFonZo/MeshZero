@@ -21,6 +21,8 @@ struct Field {
     enum Type { Bool, Int, Enum, Text, Action, Info, Header } type = Info;
     std::string label;
     std::string help;
+    // What the setting does, in plain words; ? on the field shows it.
+    std::string about;
     std::string unit;
     std::function<int64_t()> get;
     std::function<void(int64_t)> set;

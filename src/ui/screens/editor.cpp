@@ -112,7 +112,7 @@ public:
     std::string title() const override { return LV_SYMBOL_LEFT " " + title_ + (dirty_ ? "  (edited)" : ""); }
     std::string hint() const override
     {
-        return dirty_ ? "Enter change   Esc save" : "Enter change   Esc back";
+        return dirty_ ? "Enter change   ? explain   Esc save" : "Enter change   ? explain   Esc back";
     }
 
     void refresh() override
@@ -183,6 +183,11 @@ public:
     bool on_key(const Key& key) override
     {
         if (list_->handle_key(key)) return true;
+        if (key.is_char('?')) {
+            const size_t i = static_cast<size_t>(list_->selected());
+            if (i < fields_.size()) explain(fields_[i]);
+            return true;
+        }
         if (key.k == K::Esc) {
             if (!dirty_) return false;
             app.push(make_confirm(app, title_, "Save changes?",
@@ -269,6 +274,17 @@ public:
 
 private:
     static std::string help_of(const Field& f) { return f.help_text ? f.help_text() : f.help; }
+
+    // Shows what a field does. The note under the list follows when it says
+    // what the values mean, as it does for numbers and text; on the other
+    // fields it is a short form of the explanation.
+    void explain(const Field& f)
+    {
+        std::string text       = f.about;
+        const std::string note = f.type == Field::Int || f.type == Field::Text ? help_of(f) : std::string();
+        if (!note.empty()) text += (text.empty() ? "" : "\n\n") + note;
+        if (!text.empty()) app.push(make_text_view(app, f.label, text));
+    }
 
     // The radio firmware keeps "never" in its intervals, all in seconds, as the
     // largest value it allows (CLIENT_HIDDEN, or device metrics by default).
