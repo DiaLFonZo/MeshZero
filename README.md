@@ -23,7 +23,7 @@ other mesh networking technologies.
   particular, pick emoji from a grid while writing.
 - Message details (signal, hops, encryption, delivery) and sending a failed
   message again.
-- Background service keeps meshtastic running even when off app.
+- Optional background mode that keeps the radio running after you close the app.
 - Node listing with details, actions, and all supported functions.
 - A simple radar-style map of the nodes around you.
 - A radio page with link state, counters, GPS fix and a live packet log.
@@ -98,14 +98,14 @@ will reach out to add their settings as this app becomes more popular (hopefully
 
 ## Running in the background
 
-The radio stays on after you close the app, so messages keep arriving and your
-node keeps relaying. While it runs it owns the LoRa cap and the GPS, so other
-apps can't use them. If you'd rather only have your node "active" when the app
-is open, turn off Setup > Run in background.
+The radio stops about 10 seconds after you close the app, so other apps can use
+the LoRa cap. To keep receiving messages and relaying for the mesh while it's
+closed, turn on Setup > Run in background. While it's on, MeshZero owns the LoRa
+cap and the GPS, so other apps can't use them.
 
 ## Using it from other software
 
-Turn on Setup > Network access first. It is off by default. The Radio page
+Turn on Setup > Network Access (LAN) first. It is off by default. The Radio page
 then shows the device's IP address. Point a Meshtastic TCP client at it on
 port 4403:
 
