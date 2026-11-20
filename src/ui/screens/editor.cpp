@@ -133,7 +133,8 @@ public:
                     break;
                 }
                 case Field::Int:
-                    it.right           = std::to_string(f.get()) + (f.unit.empty() ? "" : " " + f.unit);
+                    it.right = never(f, f.get()) ? "never"
+                                                 : std::to_string(f.get()) + (f.unit.empty() ? "" : " " + f.unit);
                     it.has_right_color = true;
                     it.right_color     = ui::c_text();
                     break;
@@ -224,9 +225,10 @@ public:
                 help += (help.empty() ? "" : "\n") + std::string("Range: ") + std::to_string(f.min) + "-" +
                         std::to_string(f.max) + (f.unit.empty() ? "" : " " + f.unit);
                 app.push(make_input(
-                    app, f.label, std::to_string(f.get()), 12, help,
+                    app, f.label, never(f, f.get()) ? "never" : std::to_string(f.get()), 12, help,
                     [this, i](const std::string& text) {
                         Field& field = fields_[i];
+                        if (text == "never" && never(field, field.get())) return true;  // left as it was
                         char* end    = nullptr;
                         const long long v = strtoll(text.c_str(), &end, 10);
                         if (text.empty() || (end && *end) || v < field.min || v > field.max) {
@@ -267,6 +269,10 @@ public:
 
 private:
     static std::string help_of(const Field& f) { return f.help_text ? f.help_text() : f.help; }
+
+    // The radio firmware keeps "never" in its intervals, all in seconds, as the
+    // largest value it allows (CLIENT_HIDDEN, or device metrics by default).
+    static bool never(const Field& f, int64_t v) { return f.unit == "s" && v >= 2147483647; }
 
     // Gives a Text field the value typed in; false, with the reason shown, if it refuses it.
     bool take_text(size_t i, const std::string& text)

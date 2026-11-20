@@ -639,13 +639,13 @@ std::unique_ptr<Screen> page_telemetry(App& app)
     auto cfg = std::make_shared<meshtastic_ModuleConfig_TelemetryConfig>(app.mesh.modules.telemetry);
     std::vector<Field> f;
     f.push_back(MZ_BOOL("Send device metrics", device_telemetry_enabled, ""));
-    f.push_back(MZ_INT("Device metrics interval", device_update_interval, 0, 86400, "s", "0 = default (30 min)"));
+    f.push_back(MZ_INT("Device metrics interval", device_update_interval, 0, 86400, "s", "0 = default (1 h)"));
     f.push_back(MZ_BOOL("Environment sensors", environment_measurement_enabled, ""));
-    f.push_back(MZ_INT("Environment interval", environment_update_interval, 0, 86400, "s", "0 = default (30 min)"));
+    f.push_back(MZ_INT("Environment interval", environment_update_interval, 0, 86400, "s", "0 = default (1 h)"));
     f.push_back(MZ_BOOL("Power sensors", power_measurement_enabled, ""));
-    f.push_back(MZ_INT("Power interval", power_update_interval, 0, 86400, "s", "0 = default"));
+    f.push_back(MZ_INT("Power interval", power_update_interval, 0, 86400, "s", "0 = default (1 h)"));
     f.push_back(MZ_BOOL("Air quality sensors", air_quality_enabled, ""));
-    f.push_back(MZ_INT("Air quality interval", air_quality_interval, 0, 86400, "s", "0 = default"));
+    f.push_back(MZ_INT("Air quality interval", air_quality_interval, 0, 86400, "s", "0 = default (1 h)"));
     return make_editor(
         app, "Telemetry", std::move(f),
         [&app, cfg]() {
@@ -1298,12 +1298,12 @@ public:
                                  "mesh. While it is on, other LoRa apps can't use the cap.",
                                  {"Off", "On"}, [m](int c) { m->set_background(c == 1); }));
         });
-        entry("Network access", mesh.network_access == 1 ? "on" : "off", [a, m]() {
+        entry("Network Access (LAN)", mesh.network_access == 1 ? "on" : "off", [a, m]() {
             if (m->network_access < 0) {
                 a->toast("Radio offline", true);
                 return;
             }
-            a->push(make_confirm(*a, "Network access",
+            a->push(make_confirm(*a, "Network Access (LAN)",
                                  "Let other devices on your network use this radio, for MeshMonitor or a phone app. "
                                  "There is no password.",
                                  {"Off", "On"}, [m](int c) { m->set_network_access(c == 1); }));
