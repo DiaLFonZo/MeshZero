@@ -14,12 +14,14 @@ namespace {
 
 using Region = meshtastic_Config_LoRaConfig_RegionCode;
 
-// The Cap LoRa-1262 front end covers roughly 850-930 MHz.
+// The Cap LoRa-1262 front end covers roughly 850-930 MHz. Only supported
+// regions are offered; the others are here so that a radio already set to
+// one shows its name.
 struct RegionInfo {
     int value;
     const char* name;
     const char* band;
-    bool supported;
+    bool supported;  // the cap and the radio daemon's firmware can use it
 };
 const RegionInfo kRegions[] = {
     {meshtastic_Config_LoRaConfig_RegionCode_US, "US", "United States 902-928 MHz", true},
@@ -127,12 +129,14 @@ bool parse_mhz(const std::string& s, double& mhz)
     return end != text.c_str() && *end == 0 && mhz >= kRadioMinMHz && mhz <= kRadioMaxMHz;
 }
 
-std::vector<Opt> region_opts()
+// The supported regions, and `current` when the radio is set to one that is
+// not, so that it shows by name.
+std::vector<Opt> region_opts(int current)
 {
     std::vector<Opt> opts;
     opts.push_back({meshtastic_Config_LoRaConfig_RegionCode_UNSET, "UNSET"});
     for (const auto& r : kRegions) {
-        opts.push_back({r.value, std::string(r.name) + "  " + r.band + (r.supported ? "" : " (unsupported)")});
+        if (r.supported || r.value == current) opts.push_back({r.value, std::string(r.name) + "  " + r.band});
     }
     return opts;
 }
@@ -300,7 +304,7 @@ std::unique_ptr<Screen> page_lora(App& app)
                 app.toast("Fixed frequency cleared: outside " + region_name(region));
             }
         },
-        region_opts(), "Required to transmit"));
+        region_opts(cfg->region), "Required to transmit"));
     // One row says what the radio runs on: a preset, or values of its own.
     f.push_back(f_enum(
         "Modem", [cfg]() { return static_cast<int64_t>(cfg->use_preset ? preset_info(cfg->modem_preset).value : kCustomModem); },
@@ -1111,10 +1115,13 @@ class RegionScreen : public Screen {
 public:
     RegionScreen(App& a, bool first_run) : Screen(a), first_run_(first_run)
     {
-        int y = 0;
+        int y            = 0;
+        const int region = mesh.config.lora.region;
         if (first_run) {
-            lv_obj_t* l = ui::label(root, "Select your region to enable transmitting.",
-                                    ui::c_warn(), ui::font_small());
+            const std::string why = region == meshtastic_Config_LoRaConfig_RegionCode_UNSET
+                                        ? "Select your region to enable transmitting."
+                                        : region_name(region) + " can't be used with MeshZero. Select your region.";
+            lv_obj_t* l = ui::label(root, why, ui::c_warn(), ui::font_small());
             lv_obj_set_pos(l, 5, 2);
             lv_obj_set_width(l, kContentW - 10);
             lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
@@ -1124,18 +1131,16 @@ public:
         list_->set_prefix_width(58);
         std::vector<ui::ListItem> items;
         int current = 0;
-        for (size_t i = 0; i < sizeof(kRegions) / sizeof(kRegions[0]); ++i) {
-            const RegionInfo& r = kRegions[i];
+        for (const RegionInfo& r : kRegions) {
+            if (!r.supported) continue;
             ui::ListItem it;
             it.prefix           = r.name;
             it.has_prefix_color = true;
-            it.prefix_color     = r.supported ? ui::c_accent() : ui::c_dim();
+            it.prefix_color     = ui::c_accent();
             it.text             = r.band;
-            it.right            = r.supported ? "" : "unsupported";
-            it.has_color        = !r.supported;
-            it.color            = ui::c_dim();
+            if (region == r.value) current = static_cast<int>(items.size());
             items.push_back(it);
-            if (mesh.config.lora.region == r.value) current = static_cast<int>(i);
+            shown_.push_back(&r);
         }
         list_->set_items(items);
         list_->select(current);
@@ -1147,7 +1152,7 @@ public:
     {
         if (list_->handle_key(key)) return true;
         if (key.k != K::Enter) return false;
-        const RegionInfo& r = kRegions[static_cast<size_t>(list_->selected())];
+        const RegionInfo& r = *shown_[static_cast<size_t>(list_->selected())];
         if (!mesh.ready()) {
             app.toast("Radio offline", true);
             return true;
@@ -1167,6 +1172,7 @@ public:
 private:
     bool first_run_;
     std::unique_ptr<ui::ListView> list_;
+    std::vector<const RegionInfo*> shown_;  // what each row stands for
 };
 
 // -------------------------------------------------------------- setup tab
@@ -1348,6 +1354,14 @@ std::unique_ptr<Screen> make_channels(App& app)
 std::unique_ptr<Screen> make_region_picker(App& app, bool first_run)
 {
     return std::make_unique<RegionScreen>(app, first_run);
+}
+
+bool region_supported(int region)
+{
+    for (const auto& r : kRegions) {
+        if (r.value == region) return r.supported;
+    }
+    return false;
 }
 
 }  // namespace mz

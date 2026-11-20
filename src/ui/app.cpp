@@ -374,8 +374,9 @@ void App::tick()
         if (update::take_notice()) {
             notify(LV_SYMBOL_DOWNLOAD " MeshZero " + update::available() + " is available");
         }
-        // A radio without a region may not transmit: ask once, right away.
-        if (mesh.ready() && mesh.region_unset() && !region_prompted_) {
+        // A radio without a region may not transmit, and one on a region MeshZero
+        // does not offer may transmit where it should not: ask once, right away.
+        if (mesh.ready() && mesh.config.has_lora && !region_supported(mesh.config.lora.region) && !region_prompted_) {
             region_prompted_ = true;
             push(make_region_picker(*this, true));
         } else if (mesh.ready() && mesh.ask_background && !background_prompted_ && stack_.size() == 1) {
