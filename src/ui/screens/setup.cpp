@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Setup tab: radio, node, channel and module configuration.
 #include <cstring>
+#include <optional>
 #include <random>
 
 #include "common/util.h"
@@ -251,8 +252,9 @@ std::unique_ptr<Screen> page_user(App& app)
 
 // Leftovers of a custom setup must not survive a move to another region or
 // to a preset: a frequency fixed for one band is wrong, and may be illegal,
-// in another, and custom modem values next to a preset only mislead. What the
-// user set in the same edit is theirs and stays.
+// in another, and custom modem values next to a preset only mislead. A fixed
+// frequency slot goes too, so that the new preset's public channel is on its
+// own slot. What the user set in the same edit is theirs and stays.
 meshtastic_Config_LoRaConfig lora_cleaned(const meshtastic_Config_LoRaConfig& before, meshtastic_Config_LoRaConfig l)
 {
     const bool region_changed = l.region != before.region;
@@ -266,7 +268,7 @@ meshtastic_Config_LoRaConfig lora_cleaned(const meshtastic_Config_LoRaConfig& be
         if (l.override_frequency == before.override_frequency) l.override_frequency = 0;
         if (l.frequency_offset == before.frequency_offset) l.frequency_offset = 0;
     }
-    if (region_changed && l.channel_num == before.channel_num) l.channel_num = 0;
+    if ((region_changed || to_preset) && l.channel_num == before.channel_num) l.channel_num = 0;
     // One outside the region's band stays: the user agreed to it when they set
     // it, or the radio already runs on it. One the radio cannot tune to does not go to it.
     if (l.override_frequency != 0 && (l.override_frequency < kRadioMinMHz || l.override_frequency > kRadioMaxMHz)) {
@@ -285,6 +287,23 @@ std::string out_of_band_warning(int region, double mhz)
            mhz_text(high) +
            " MHz.\nTransmitting there may be against the law where you are, and the radio may not work as "
            "expected or reach other nodes.";
+}
+
+// The primary channel, made to follow the preset again, when it is the
+// public channel of the preset being left with that preset's name written
+// out, as links and setups do: unnamed, it takes the new preset's name, and
+// with it that preset's frequency slot. Empty when it is a channel of its
+// own, which stays as it is, or when the preset does not change.
+std::optional<meshtastic_Channel> public_channel_moved(const Mesh& mesh, const meshtastic_Config_LoRaConfig& before,
+                                                       const meshtastic_Config_LoRaConfig& after)
+{
+    if (!before.use_preset || !after.use_preset || before.modem_preset == after.modem_preset) return std::nullopt;
+    meshtastic_Channel c = mesh.channels[0];
+    const auto& s        = c.settings;
+    const bool public_key = s.psk.size == 1 && s.psk.bytes[0] == 1;
+    if (!c.has_settings || !public_key || modem_preset_name(before.modem_preset) != s.name) return std::nullopt;
+    c.settings.name[0] = 0;
+    return c;
 }
 
 std::unique_ptr<Screen> page_lora(App& app)
@@ -389,7 +408,12 @@ std::unique_ptr<Screen> page_lora(App& app)
             meshtastic_Config c     = meshtastic_Config_init_zero;
             c.which_payload_variant = meshtastic_Config_lora_tag;
             c.payload_variant.lora  = lora_cleaned(*before, *cfg);
-            send_config(app.mesh, c);
+            app.mesh.begin_edit();
+            app.mesh.set_config(c);
+            if (const auto primary = public_channel_moved(app.mesh, *before, c.payload_variant.lora)) {
+                app.mesh.set_channel(*primary);
+            }
+            app.mesh.commit_edit();
         },
         kRestartNote);
 }

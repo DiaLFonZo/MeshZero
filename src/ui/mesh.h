@@ -233,5 +233,8 @@ const char* routing_error_name(int error);
 std::string delivery_error_text(int error);
 const char* hw_model_name(int model);
 const char* role_name(int role);
+// A modem preset's name as the radio firmware writes it, which is also the
+// name of that preset's public channel: "LongFast", "LongMod", ...
+std::string modem_preset_name(int preset);
 
 }  // namespace mz

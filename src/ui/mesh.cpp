@@ -1207,7 +1207,12 @@ std::string Mesh::preset_name() const
 {
     if (!config.has_lora) return "LongFast";
     if (!config.lora.use_preset) return "Custom";
-    switch (config.lora.modem_preset) {
+    return modem_preset_name(config.lora.modem_preset);
+}
+
+std::string modem_preset_name(int preset)
+{
+    switch (preset) {
         case meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST:
             return "LongFast";
         case meshtastic_Config_LoRaConfig_ModemPreset_LONG_SLOW:
