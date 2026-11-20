@@ -259,7 +259,6 @@ std::unique_ptr<Screen> page_user(App& app)
     f.back().about = "Tells other nodes whether you take direct messages. When off, apps that honor it, MeshZero "
                      "included, don't offer to message you.";
     f.push_back(f_info("Node ID", [&app]() { return node_id_str(app.mesh.my_num); }));
-    f.back().about = "This node's unique ID on the mesh. It stays the same when you rename the node.";
     return make_editor(app, "Your node", std::move(f), [&app, cfg]() { app.mesh.set_owner(*cfg); });
 }
 
@@ -1377,10 +1376,6 @@ private:
 
 // ------------------------------------------------------------ accent color
 
-// What ? says about the accent color, in Setup and in the picker.
-const char* const kAccentAbout = "The highlight color used across MeshZero, such as for the current tab and delivered "
-                                 "ticks. It only changes how the app looks.";
-
 // Each colour is shown in itself. Pages take a new accent when they are next
 // drawn, which for Setup is right away.
 class AccentScreen : public Screen {
@@ -1406,15 +1401,11 @@ public:
         list_->select(static_cast<int>(ui::accent_index()));
     }
     std::string title() const override { return LV_SYMBOL_LEFT " Accent color"; }
-    std::string hint() const override { return "Up/Down choose   Enter select   ? explain   Esc back"; }
+    std::string hint() const override { return "Up/Down choose   Enter select   Esc back"; }
 
     bool on_key(const Key& key) override
     {
         if (list_->handle_key(key)) return true;
-        if (key.is_char('?')) {
-            app.push(make_text_view(app, "Accent color", kAccentAbout));
-            return true;
-        }
         if (key.k != K::Enter) return false;
         ui::set_accent(static_cast<size_t>(list_->selected()));
         app.pop();
@@ -1565,10 +1556,11 @@ public:
         entry("Range test", mesh.modules.range_test.enabled ? "on" : "off",
               "Sends numbered test messages to find out how far your radio reaches.", open(page_range_test));
         header("Appearance");
-        entry("Accent color", ui::accents()[ui::accent_index()].name, kAccentAbout,
+        entry("Accent color", ui::accents()[ui::accent_index()].name, "",
               [a]() { a->push(std::make_unique<AccentScreen>(*a)); });
         header("Maintenance");
-        entry("Restart radio", "", "Restarts the radio, for when it stops responding. Your settings are kept.",
+        // Plain actions like this one need no explanation; ? does nothing on them.
+        entry("Restart radio", "", "",
               [a, m]() {
                   a->push(make_confirm(*a, "Restart radio", "Restart the radio?",
                                        {"Cancel", "Restart"}, [a, m](int c) {
@@ -1578,8 +1570,7 @@ public:
                                            }
                                        }));
               });
-        entry("Delete all messages", "",
-              "Deletes the message history of every channel and direct chat, on this device. It can't be undone.",
+        entry("Delete all messages", "", "",
               [a, m]() {
                   a->push(make_confirm(*a, "Delete all messages",
                                        "Delete the messages of every channel and direct chat? This can't be undone.",
@@ -1634,7 +1625,7 @@ public:
                                            if (c == 1) update::set_enabled(!on);
                                        }));
               });
-        entry("Help", "", "Keys, message ticks, using the radio from other apps, and what to do when it's offline.",
+        entry("Help", "", "",
               [a]() { a->push(make_help(*a)); });
         list_->set_items(items);
     }
