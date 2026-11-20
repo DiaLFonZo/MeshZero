@@ -269,6 +269,7 @@ const char* const kHelp =
     "Enter: open, edit, send\n"
     "Esc: back. Hold it for 2 seconds to exit\n"
     "Tab: next page\n"
+    "?: in Setup, explain the highlighted setting\n"
     "Settings: Esc asks to save\n\n"
     "MESSAGES\n"
     "Colored tick: delivered. Grey tick: relayed. Cross: failed.\n"

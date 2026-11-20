@@ -1578,6 +1578,17 @@ public:
                                            }
                                        }));
               });
+        entry("Delete all messages", "",
+              "Deletes the message history of every channel and direct chat, on this device. It can't be undone.",
+              [a, m]() {
+                  a->push(make_confirm(*a, "Delete all messages",
+                                       "Delete the messages of every channel and direct chat? This can't be undone.",
+                                       {"Cancel", "Delete"}, [a, m](int c) {
+                                           if (c != 1) return;
+                                           m->delete_all_history();
+                                           a->toast("All messages deleted");
+                                       }));
+              });
         // The radio keeps favorites when MeshZero asks it to clear its nodes.
         entry("Reset node list", "",
               "Clears the nodes the radio knows, except favorites, and restarts it. Nodes come back as they're heard "
