@@ -133,15 +133,14 @@ public:
                     break;
                 }
                 case Field::Int:
-                    it.right = never(f, f.get()) ? "never"
-                                                 : std::to_string(f.get()) + (f.unit.empty() ? "" : " " + f.unit);
+                    it.right           = shown(f, f.get());
                     it.has_right_color = true;
                     it.right_color     = ui::c_text();
                     break;
                 case Field::Enum: {
                     const int64_t v = f.get();
                     it.right        = "(" + std::to_string(v) + ")";
-                    for (const Opt& o : f.opts) {
+                    for (const Opt& o : options(f)) {
                         if (o.value == v) it.right = o.label;
                     }
                     // Long option labels carry an explanation after two spaces.
@@ -210,36 +209,41 @@ public:
                 dirty_ = true;
                 break;
             case Field::Enum: {
+                // The options are taken now, so that a pick means what was shown.
+                auto opts = std::make_shared<std::vector<Opt>>(options(f));
                 std::vector<std::string> labels;
                 int current = -1;
-                for (size_t k = 0; k < f.opts.size(); ++k) {
-                    labels.push_back(f.opts[k].label);
-                    if (f.opts[k].value == f.get()) current = static_cast<int>(k);
+                for (size_t k = 0; k < opts->size(); ++k) {
+                    labels.push_back((*opts)[k].label);
+                    if ((*opts)[k].value == f.get()) current = static_cast<int>(k);
                 }
-                app.push(make_picker(app, f.label, labels, current, [this, i](int choice) {
-                    Field& field = fields_[i];
-                    if (choice >= 0 && static_cast<size_t>(choice) < field.opts.size()) {
-                        field.set(field.opts[static_cast<size_t>(choice)].value);
+                app.push(make_picker(app, f.label, labels, current, [this, i, opts](int choice) {
+                    if (choice >= 0 && static_cast<size_t>(choice) < opts->size()) {
+                        fields_[i].set((*opts)[static_cast<size_t>(choice)].value);
                         dirty_ = true;
                     }
                 }));
                 break;
             }
             case Field::Int: {
-                std::string help = f.help;
-                help += (help.empty() ? "" : "\n") + std::string("Range: ") + std::to_string(f.min) + "-" +
-                        std::to_string(f.max) + (f.unit.empty() ? "" : " " + f.unit);
+                std::string help = help_of(f);
+                help += (help.empty() ? "" : "\n") + std::string("Range: ") + accepted(f) +
+                        (f.unit.empty() ? "" : " " + f.unit);
+                // The largest interval often stands for never; say so, as it's typed as a number.
+                int64_t lo = 0, hi = 0;
+                range(f, lo, hi);
+                if (hi >= 2147483647 && !shown_number(f, hi)) help += "\n" + std::to_string(hi) + " = " + shown(f, hi);
+                // A value left as it was stays, even one outside the range now.
+                const std::string initial = std::to_string(f.get());
                 app.push(make_input(
-                    app, f.label, never(f, f.get()) ? "never" : std::to_string(f.get()), 12, help,
-                    [this, i](const std::string& text) {
+                    app, f.label, initial, 12, help,
+                    [this, i, initial](const std::string& text) {
                         Field& field = fields_[i];
-                        if (text == "never" && never(field, field.get())) return true;  // left as it was
-                        char* end    = nullptr;
+                        if (text == initial) return true;
+                        char* end         = nullptr;
                         const long long v = strtoll(text.c_str(), &end, 10);
-                        if (text.empty() || (end && *end) || v < field.min || v > field.max) {
-                            app.toast("Enter a number from " + std::to_string(field.min) + " to " +
-                                          std::to_string(field.max),
-                                      true);
+                        if (text.empty() || (end && *end) || !takes(field, v)) {
+                            app.toast("Enter " + accepted_sentence(field), true);
                             return false;
                         }
                         field.set(v);
@@ -286,9 +290,75 @@ private:
         if (!text.empty()) app.push(make_text_view(app, f.label, text));
     }
 
+    static std::vector<Opt> options(const Field& f) { return f.opts_of ? f.opts_of() : f.opts; }
+
+    // The bounds an Int field takes now.
+    static void range(const Field& f, int64_t& lo, int64_t& hi)
+    {
+        lo = f.min;
+        hi = f.max;
+        if (f.bounds) f.bounds(lo, hi);
+    }
+
+    static bool takes(const Field& f, int64_t v)
+    {
+        int64_t lo = 0, hi = 0;
+        range(f, lo, hi);
+        return (f.zero_ok && v == 0) || (v >= lo && v <= hi);
+    }
+
+    // Whether 0 is a value of its own, outside the range.
+    static bool zero_apart(const Field& f)
+    {
+        int64_t lo = 0, hi = 0;
+        range(f, lo, hi);
+        return f.zero_ok && (lo > 0 || hi < 0);
+    }
+
+    // Two bounds, written so that a minus sign isn't taken for the dash between them.
+    static std::string span(int64_t lo, int64_t hi, const char* dash)
+    {
+        if (lo == hi) return std::to_string(lo);
+        return std::to_string(lo) + (lo < 0 ? " to " : dash) + std::to_string(hi);
+    }
+
+    // What an Int field takes, for its input: "0, or 3600-86400".
+    static std::string accepted(const Field& f)
+    {
+        int64_t lo = 0, hi = 0;
+        range(f, lo, hi);
+        return (zero_apart(f) ? "0, or " : "") + span(lo, hi, "-");
+    }
+
+    // The same, for a message: "0, or a number from 3600 to 86400".
+    static std::string accepted_sentence(const Field& f)
+    {
+        int64_t lo = 0, hi = 0;
+        range(f, lo, hi);
+        const std::string numbers = lo == hi ? std::to_string(lo)
+                                             : "a number from " + std::to_string(lo) + " to " + std::to_string(hi);
+        return (zero_apart(f) ? "0, or " : "") + numbers;
+    }
+
     // The radio firmware keeps "never" in its intervals, all in seconds, as the
     // largest value it allows (CLIENT_HIDDEN, or device metrics by default).
     static bool never(const Field& f, int64_t v) { return f.unit == "s" && v >= 2147483647; }
+
+    // How an Int field's value reads: a word the field gives it, never, or the number.
+    static std::string shown(const Field& f, int64_t v)
+    {
+        if (f.value_text) {
+            const std::string text = f.value_text(v);
+            if (!text.empty()) return text;
+        }
+        if (never(f, v)) return "never";
+        return std::to_string(v) + (f.unit.empty() ? "" : " " + f.unit);
+    }
+
+    static bool shown_number(const Field& f, int64_t v)
+    {
+        return (!f.value_text || f.value_text(v).empty()) && !never(f, v);
+    }
 
     // Gives a Text field the value typed in; false, with the reason shown, if it refuses it.
     bool take_text(size_t i, const std::string& text)
