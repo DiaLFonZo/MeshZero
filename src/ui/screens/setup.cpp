@@ -469,8 +469,10 @@ std::unique_ptr<Screen> page_position(App& app)
                        "0 = default (100 m)"));
     f.push_back(MZ_INT("Smart min interval", broadcast_smart_minimum_interval_secs, 0, 86400, "s",
                        "0 = default (30 s)"));
+    // The radio firmware takes its first fix one interval after it starts,
+    // which, with running in the background off, is when MeshZero opens.
     f.push_back(MZ_INT("GPS update interval", gps_update_interval, 0, 86400, "s",
-                       "0 = default (2 min)"));
+                       "0 = default (2 min). First fix after opening waits this long"));
     f.push_back(f_header("Fixed position"));
     f.push_back(MZ_BOOL("Use fixed position", fixed_position, ""));
     f.push_back(f_action(
