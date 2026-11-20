@@ -387,6 +387,11 @@ void App::tick()
         if (update::take_notice()) {
             notify(LV_SYMBOL_DOWNLOAD " MeshZero " + update::available() + " is available");
         }
+        // Once a session, so that a radio which won't take it can't keep restarting.
+        if (mesh.ready() && mesh.config.has_lora && !coding_rate_checked_) {
+            coding_rate_checked_ = true;
+            repair_coding_rate(*this);
+        }
         // A radio without a region may not transmit, and one on a region MeshZero
         // does not offer may transmit where it should not: ask once, right away.
         if (mesh.ready() && mesh.config.has_lora && !region_supported(mesh.config.lora.region) && !region_prompted_) {

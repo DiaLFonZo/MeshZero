@@ -1888,4 +1888,24 @@ bool region_supported(int region)
     return false;
 }
 
+bool repair_coding_rate(App& app)
+{
+    // A preset with a coding rate of 5-8 stored next to it that isn't its own
+    // runs on that rate (RadioInterface::applyModemConfig()). That is almost
+    // always the radio having saved a 0 sent with the preset as 5, as from
+    // MeshZero 0.2.0 or another app: the official apps don't show the coding
+    // rate while a preset is in use.
+    const meshtastic_Config_LoRaConfig& l = app.mesh.config.lora;
+    if (!app.mesh.config.has_lora || !l.use_preset || !known_preset(l.modem_preset)) return false;
+    const PresetInfo& p = preset_info(l.modem_preset);
+    if (l.coding_rate < 5 || l.coding_rate > 8 || l.coding_rate == p.cr) return false;
+    meshtastic_Config c                = meshtastic_Config_init_zero;
+    c.which_payload_variant            = meshtastic_Config_lora_tag;
+    c.payload_variant.lora             = l;
+    c.payload_variant.lora.coding_rate = static_cast<uint8_t>(p.cr);
+    send_config(app.mesh, c);
+    app.toast("Coding rate set back to 4/" + std::to_string(p.cr) + " for " + p.name + ". Radio restarting.");
+    return true;
+}
+
 }  // namespace mz
