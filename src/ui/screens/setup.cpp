@@ -150,6 +150,16 @@ bool parse_mhz(const std::string& s, double& mhz)
     return end != text.c_str() && *end == 0 && mhz >= kRadioMinMHz && mhz <= kRadioMaxMHz;
 }
 
+// Options with the current value added when it isn't among them, so that it shows by name.
+std::vector<Opt> with_current(std::vector<Opt> opts, int64_t current, const std::string& label)
+{
+    for (const Opt& o : opts) {
+        if (o.value == current) return opts;
+    }
+    opts.push_back({current, label});
+    return opts;
+}
+
 // The supported regions, and `current` when the radio is set to one that is
 // not, so that it shows by name.
 std::vector<Opt> region_opts(int current)
@@ -281,26 +291,35 @@ const Bandwidth kBandwidths[] = {{7, "7.8 kHz"},   {10, "10.4 kHz"}, {15, "15.6 
                                  {31, "31.25 kHz"}, {41, "41.7 kHz"}, {62, "62.5 kHz"}, {125, "125 kHz"},
                                  {250, "250 kHz"},  {500, "500 kHz"}};
 
+bool sx1262_bw(int code)
+{
+    for (const Bandwidth& b : kBandwidths) {
+        if (b.code == code) return true;
+    }
+    return false;
+}
+
+// A bandwidth as stored, as the radio uses it: "62.5 kHz".
+std::string bw_text(int code)
+{
+    for (const Bandwidth& b : kBandwidths) {
+        if (b.code == code) return b.label;
+    }
+    return mhz_text(bw_khz(code)) + " kHz";
+}
+
 // The bandwidths the region holds, and the one in use when it isn't among
 // them, so that it shows by name.
 std::vector<Opt> bandwidth_opts(const meshtastic_Config_LoRaConfig& l)
 {
     std::vector<Opt> opts;
     const int current = l.use_preset ? preset_info(l.modem_preset).bw : l.bandwidth;
-    bool listed       = false;
     for (const Bandwidth& b : kBandwidths) {
-        if (!bw_fits(l.region, bw_khz(b.code))) continue;
-        opts.push_back({b.code, b.label});
-        listed = listed || b.code == current;
+        if (bw_fits(l.region, bw_khz(b.code))) opts.push_back({b.code, b.label});
     }
-    if (!listed) {
-        std::string label = mhz_text(bw_khz(current)) + " kHz  not one this radio can use";
-        for (const Bandwidth& b : kBandwidths) {
-            if (b.code == current) label = std::string(b.label) + "  too wide for " + region_name(l.region);
-        }
-        opts.push_back({current, label});
-    }
-    return opts;
+    return with_current(opts, current,
+                        bw_text(current) + (sx1262_bw(current) ? "  too wide for " + region_name(l.region)
+                                                               : "  not one this radio can use"));
 }
 
 // The presets the region holds, the one in use, and Custom.
@@ -333,6 +352,18 @@ int preset_cr(const meshtastic_Config_LoRaConfig& l, const meshtastic_Config_LoR
     return preset_info(l.modem_preset).cr;
 }
 
+// On a preset, fills in the preset's own modem values, as the radio does when
+// it starts. The coding rate matters: the radio would save a 0 as 5, and run
+// a preset on a stored 5-8 instead of its own rate.
+void with_preset_values(meshtastic_Config_LoRaConfig& l)
+{
+    if (!l.use_preset) return;
+    const PresetInfo& p = preset_info(l.modem_preset);
+    l.bandwidth         = static_cast<decltype(l.bandwidth)>(p.bw);
+    l.spread_factor     = static_cast<decltype(l.spread_factor)>(p.sf);
+    l.coding_rate       = static_cast<decltype(l.coding_rate)>(p.cr);
+}
+
 // Moves a working copy from a preset to modem values of its own, starting
 // from the ones in use.
 void make_custom(meshtastic_Config_LoRaConfig& l, const meshtastic_Config_LoRaConfig& radio)
@@ -360,16 +391,6 @@ std::string dur_text(int64_t secs)
     if (secs % 3600 == 0) return std::to_string(secs / 3600) + " h";
     if (secs % 60 == 0) return std::to_string(secs / 60) + " min";
     return std::to_string(secs) + " s";
-}
-
-// Options with the current value added when it isn't among them, so that it shows by name.
-std::vector<Opt> with_current(std::vector<Opt> opts, int64_t current, const std::string& label)
-{
-    for (const Opt& o : opts) {
-        if (o.value == current) return opts;
-    }
-    opts.push_back({current, label});
-    return opts;
 }
 
 // The default key, AQ== in base64.
@@ -529,15 +550,7 @@ meshtastic_Config_LoRaConfig lora_cleaned(const meshtastic_Config_LoRaConfig& be
     }
     const bool region_changed = l.region != before.region;
     const bool to_preset      = l.use_preset && (!before.use_preset || l.modem_preset != before.modem_preset);
-    if (l.use_preset) {
-        // The preset's own values, as the radio fills them in when it starts.
-        // The coding rate matters: the radio would save 0 as 5, and then run a
-        // preset on a stored 5-8 instead of its own rate.
-        const PresetInfo& p = preset_info(l.modem_preset);
-        l.bandwidth         = static_cast<decltype(l.bandwidth)>(p.bw);
-        l.spread_factor     = static_cast<decltype(l.spread_factor)>(p.sf);
-        l.coding_rate       = static_cast<decltype(l.coding_rate)>(p.cr);
-    }
+    with_preset_values(l);
     if (region_changed || to_preset) {
         if (l.override_frequency == before.override_frequency) l.override_frequency = 0;
         if (l.frequency_offset == before.frequency_offset) l.frequency_offset = 0;
@@ -1346,11 +1359,8 @@ std::string lora_summary(const meshtastic_Config_LoRaConfig& l)
     if (l.use_preset) {
         out += preset_label(l.modem_preset);
     } else {
-        char modem[48];
-        snprintf(modem, sizeof(modem), "SF%u / %s kHz / CR 4/%u", static_cast<unsigned>(l.spread_factor),
-                 l.bandwidth == 62 ? "62.5" : l.bandwidth == 31 ? "31.25" : std::to_string(l.bandwidth).c_str(),
-                 static_cast<unsigned>(l.coding_rate));
-        out += modem;
+        out += "SF" + std::to_string(l.spread_factor) + " / " + bw_text(l.bandwidth) + " / CR 4/" +
+               std::to_string(l.coding_rate);
     }
     if (l.override_frequency != 0) {
         char mhz[24];
@@ -1377,6 +1387,7 @@ meshtastic_Config_LoRaConfig lora_with(const meshtastic_Config_LoRaConfig& mine,
     l.frequency_offset   = theirs.frequency_offset;
     if (theirs.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET) l.region = theirs.region;
     if (theirs.hop_limit != 0) l.hop_limit = theirs.hop_limit;
+    with_preset_values(l);
     return l;
 }
 
