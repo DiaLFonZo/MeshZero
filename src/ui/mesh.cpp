@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ui/mesh.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -28,11 +29,31 @@ constexpr uint64_t kSyncTimeoutMs = 45000;
 constexpr uint64_t kHeartbeatMs   = 30000;
 constexpr size_t kMaxChatMsgs     = 500;
 constexpr size_t kMaxPacketLog    = 200;
-// A node ignores a request for its info when it sent that less than five
-// minutes ago, hence the first wait. Each further one is twice as long.
-constexpr uint64_t kKeyRetryMs    = 6 * 60 * 1000;
-constexpr uint64_t kKeyRetryMaxMs = 60 * 60 * 1000;
-constexpr int kKeyPatience        = 3;  // unanswered requests before the chat stops saying it is waiting
+// Automatic requests for a node's info. A node ignores one when it sent its
+// info less than five minutes ago, hence the first retry. Each further one
+// waits twice as long.
+constexpr uint64_t kInfoRetryMs    = 6 * 60 * 1000;
+constexpr uint64_t kInfoRetryMaxMs = 60 * 60 * 1000;
+// Requests before giving up on a node. After that it is asked at most once an
+// hour, and only while something still calls for it.
+constexpr int kInfoTries        = 4;
+constexpr int kKeyPatience      = 3;      // unanswered requests before a chat stops saying it is waiting
+constexpr uint64_t kInfoGapMs   = 10000;  // between any two automatic requests, to any nodes
+// After a message from a node we know nothing about, the radio asks it once by
+// itself; give that answer time to arrive first.
+constexpr uint64_t kInfoGraceMs = 30000;
+// Channel utilisation (percent) above which only requests someone is waiting
+// on go out, the level at which the firmware holds back its own.
+constexpr float kBusyChannelPct    = 25.0f;
+constexpr size_t kChannelAskMax    = 8;          // unknown senders asked about when a channel is opened
+constexpr uint32_t kChannelAskAgeS = 2 * 3600;   // ... if heard within this long
+
+uint64_t info_backoff(int tries)
+{
+    if (tries <= 0) return 0;
+    const uint64_t wait = kInfoRetryMs << (tries - 1 < 4 ? tries - 1 : 4);
+    return wait < kInfoRetryMaxMs ? wait : kInfoRetryMaxMs;
+}
 
 int hops_of(const meshtastic_MeshPacket& p)
 {
@@ -168,6 +189,27 @@ void Mesh::send_control(const std::string& request)
     send_to_radio(msg);
 }
 
+void Mesh::delete_history(const ChatKey& key)
+{
+    send_control("clear=" + std::string(key.dm ? "d" : "c") + std::to_string(key.id));
+    Chat& c   = chat(key);
+    c.msgs.clear();
+    c.unread  = 0;
+    c.last_ts = 0;
+    ++rev_chats;
+}
+
+void Mesh::delete_all_history()
+{
+    send_control("clear=all");
+    for (auto& [key, c] : chats) {
+        c.msgs.clear();
+        c.unread  = 0;
+        c.last_ts = 0;
+    }
+    ++rev_chats;
+}
+
 void Mesh::set_background(bool on)
 {
     send_control(on ? "bg=1" : "bg=0");
@@ -257,7 +299,8 @@ void Mesh::poll()
         send_to_radio(hb);
     }
 
-    if (has_active_ && active_.dm) ensure_key(active_.id);
+    if (has_active_ && active_.dm) want_info(active_.id, true, true);
+    pump_info_asks();
 
     while (!out_.empty() && fd_ >= 0) {
         const ssize_t n = send(fd_, out_.data(), out_.size(), MSG_NOSIGNAL);
@@ -287,6 +330,7 @@ void Mesh::on_frame(const std::string& payload)
                 // A different radio identity: everything cached belongs to someone else.
                 nodes.clear();
                 chats.clear();
+                info_asks_.clear();
                 history_loaded_ = false;
             }
             my_info = msg.my_info;
@@ -301,6 +345,7 @@ void Mesh::on_frame(const std::string& payload)
         case meshtastic_FromRadio_node_info_tag:
             nodes[msg.node_info.num] = msg.node_info;
             ++rev_nodes;
+            ++rev_chats;  // chats show the names
             break;
         case meshtastic_FromRadio_channel_tag:
             if (msg.channel.index >= 0 && msg.channel.index < kMaxChannels) {
@@ -448,6 +493,8 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
             network_access = text.back() == '1' ? 1 : 0;
         } else if (text == "mz:bg=1" || text == "mz:bg=0") {
             background = text.back() == '1' ? 1 : 0;
+        } else if (text == "mz:bgask=1" || text == "mz:bgask=0") {
+            ask_background = text.back() == '1';
         }
         ++rev_link;
         ++rev_config;
@@ -462,6 +509,10 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
         n.last_heard           = p.rx_time ? p.rx_time : now_s();
         if (p.rx_snr != 0) n.snr = p.rx_snr;
         n.via_mqtt = p.via_mqtt;
+        // Until it tells us more, a node is reached on the channel it was heard on.
+        if (!n.has_user && !p.pki_encrypted && p.which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
+            n.channel = p.channel;
+        }
         const int hops = hops_of(p);
         if (hops >= 0) {
             n.has_hops_away = true;
@@ -566,7 +617,11 @@ void Mesh::on_text(const meshtastic_MeshPacket& p)
     } else {
         key = ChatKey{true, m.outgoing ? p.to : p.from};
     }
+    const bool incoming = !m.outgoing;
     add_message(key, std::move(m), true);
+
+    // A sender we have no name for, or no key to answer a direct message with.
+    if (incoming) want_info(p.from, key.dm, false, kInfoGraceMs);
 }
 
 void Mesh::add_message(const ChatKey& key, StoredMsg msg, bool live)
@@ -724,7 +779,7 @@ bool Mesh::send_message(const ChatKey& key, const std::string& text, uint32_t re
     if (pending_acks_.size() > 256) pending_acks_.erase(pending_acks_.begin());
     add_message(key, std::move(m), true);
 
-    if (key.dm) ensure_key(key.id);
+    if (key.dm) want_info(key.id, true, true);
     return true;
 }
 
@@ -756,13 +811,25 @@ void Mesh::request_position(uint32_t dest)
 
 void Mesh::request_nodeinfo(uint32_t dest)
 {
+    const uint32_t id = send_info_request(dest);
+    // Count it, so an automatic request does not follow right behind.
+    const auto it = info_asks_.find(dest);
+    if (id && it != info_asks_.end()) {
+        it->second.at  = now_ms();
+        it->second.due = std::max(it->second.due, it->second.at + kInfoRetryMs);
+    }
+    toast(id ? "Node info requested from " + short_name(dest) : "Radio offline");
+}
+
+// A node info request carries our own user record and asks for theirs back.
+uint32_t Mesh::send_info_request(uint32_t dest)
+{
     meshtastic_User user = meshtastic_User_init_zero;
     if (const meshtastic_NodeInfo* self = me(); self && self->has_user) user = self->user;
     const std::string bytes      = pb_encode_msg(meshtastic_User_fields, user);
     const meshtastic_NodeInfo* n = node(dest);
-    const uint32_t id = send_packet(dest, n ? n->channel : 0, meshtastic_PortNum_NODEINFO_APP,
-                                    reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), true, true);
-    toast(id ? "Node info requested from " + short_name(dest) : "Radio offline");
+    return send_packet(dest, n ? n->channel : 0, meshtastic_PortNum_NODEINFO_APP,
+                       reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), true, true);
 }
 
 bool Mesh::has_key(uint32_t num) const
@@ -774,35 +841,98 @@ bool Mesh::has_key(uint32_t num) const
 bool Mesh::awaiting_key(uint32_t num) const
 {
     if (has_key(num)) return false;
-    const auto it = key_asks_.find(num);
-    return it != key_asks_.end() && it->second.tries <= kKeyPatience;
+    const auto it = info_asks_.find(num);
+    return it != info_asks_.end() && it->second.need_key && it->second.tries <= kKeyPatience;
 }
 
-void Mesh::ensure_key(uint32_t dest)
+bool Mesh::info_complete(uint32_t num, bool need_key) const
 {
-    if (!ready() || dest == my_num || dest == kBroadcast || has_key(dest)) return;
+    const meshtastic_NodeInfo* n = node(num);
+    if (!n || !n->has_user || !n->user.short_name[0]) return false;
     // Licensed operators send in the clear and have no key, on either side.
-    const meshtastic_NodeInfo* n = node(dest);
-    if (n && n->has_user && n->user.is_licensed) return;
-    if (const meshtastic_NodeInfo* self = me(); self && self->has_user && self->user.is_licensed) return;
+    if (!need_key || n->user.public_key.size > 0 || n->user.is_licensed) return true;
+    const meshtastic_NodeInfo* self = me();
+    return self && self->has_user && self->user.is_licensed;
+}
 
-    // A node that is away or too old to have a key never answers: ask less
-    // and less often, so an open chat does not keep spending airtime on it.
-    const uint64_t now = now_ms();
-    KeyAsk& ask        = key_asks_[dest];
-    if (ask.tries > 0) {
-        const int doublings = ask.tries - 1 < 4 ? ask.tries - 1 : 4;
-        const uint64_t wait = kKeyRetryMs << doublings;
-        if (now - ask.at < (wait < kKeyRetryMaxMs ? wait : kKeyRetryMaxMs)) return;
+bool Mesh::channel_busy() const
+{
+    if (has_local_stats) return local_stats.channel_utilization > kBusyChannelPct;
+    const meshtastic_NodeInfo* self = me();
+    return self && self->has_device_metrics && self->device_metrics.has_channel_utilization &&
+           self->device_metrics.channel_utilization > kBusyChannelPct;
+}
+
+void Mesh::want_info(uint32_t num, bool need_key, bool user_waiting, uint64_t delay_ms)
+{
+    if (num == 0 || num == my_num || num == kBroadcast) return;
+    if (const meshtastic_NodeInfo* n = node(num); n && n->is_ignored) return;
+    if (info_complete(num, need_key)) return;
+
+    const uint64_t now     = now_ms();
+    const auto [it, fresh] = info_asks_.try_emplace(num);
+    InfoAsk& ask           = it->second;
+    if (!fresh && ask.tries >= kInfoTries) {
+        // Given up on: one more try, at most once an hour.
+        if (now - ask.at < kInfoRetryMaxMs) return;
+        ask.tries = kInfoTries - 1;
+        ask.due   = now + delay_ms;
     }
-    ask.at = now;
-    ++ask.tries;
+    ask.need_key = ask.need_key || need_key;
+    ask.urgent   = ask.urgent || user_waiting;
+    const uint64_t due = std::max(now + delay_ms, ask.at + info_backoff(ask.tries));
+    if (fresh || due < ask.due) ask.due = due;
+}
 
-    meshtastic_User user = meshtastic_User_init_zero;
-    if (const meshtastic_NodeInfo* self = me(); self && self->has_user) user = self->user;
-    const std::string bytes = pb_encode_msg(meshtastic_User_fields, user);
-    send_packet(dest, n ? n->channel : 0, meshtastic_PortNum_NODEINFO_APP,
-        reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), true, true);
+// Opening a channel asks about the recent senders it can only show by number,
+// as long as they are still around.
+void Mesh::ask_channel_senders(const ChatKey& key)
+{
+    const Chat& c     = chat(key);
+    const uint32_t now = now_s();
+    std::vector<uint32_t> asked;
+    for (auto m = c.msgs.rbegin(); m != c.msgs.rend() && asked.size() < kChannelAskMax; ++m) {
+        if (m->outgoing || std::find(asked.begin(), asked.end(), m->from) != asked.end()) continue;
+        const meshtastic_NodeInfo* n = node(m->from);
+        if (!n || !n->last_heard || now - n->last_heard > kChannelAskAgeS || info_complete(m->from, false)) continue;
+        asked.push_back(m->from);
+        want_info(m->from, false, false);
+    }
+}
+
+// Sends the most pressing automatic request that is due, one at a time.
+void Mesh::pump_info_asks()
+{
+    const uint64_t now = now_ms();
+    if (!ready() || info_asks_.empty() || now < next_info_ms_) return;
+
+    const bool busy = channel_busy();
+    uint32_t pick   = 0;
+    const InfoAsk* best = nullptr;
+    for (auto it = info_asks_.begin(); it != info_asks_.end();) {
+        if (info_complete(it->first, it->second.need_key)) {
+            it = info_asks_.erase(it);
+            continue;
+        }
+        const InfoAsk& a = it->second;
+        if (a.tries < kInfoTries && a.due <= now && (a.urgent || !busy) &&
+            (!best || a.urgent > best->urgent || (a.urgent == best->urgent && a.due < best->due))) {
+            best = &a;
+            pick = it->first;
+        }
+        ++it;
+    }
+    if (!best) {
+        next_info_ms_ = now + 1000;
+        return;
+    }
+    if (!send_info_request(pick)) return;
+    InfoAsk& a    = info_asks_[pick];
+    a.at          = now;
+    a.urgent      = false;
+    a.due         = now + info_backoff(++a.tries);
+    next_info_ms_ = now + kInfoGapMs;
+    ++rev_chats;  // a chat may now say it is waiting
 }
 
 void Mesh::request_telemetry(uint32_t dest)
@@ -1098,13 +1228,19 @@ std::string Mesh::preset_name() const
 {
     if (!config.has_lora) return "LongFast";
     if (!config.lora.use_preset) return "Custom";
-    switch (config.lora.modem_preset) {
+    return modem_preset_name(config.lora.modem_preset);
+}
+
+std::string modem_preset_name(int preset)
+{
+    // As DisplayFormatters::getModemPresetDisplayName() in the radio firmware
+    // MeshZero runs (2.7.26). It doesn't know the Very long, Lite and Narrow
+    // presets: it runs them as LongFast, under the name "Invalid".
+    switch (preset) {
         case meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST:
             return "LongFast";
         case meshtastic_Config_LoRaConfig_ModemPreset_LONG_SLOW:
             return "LongSlow";
-        case meshtastic_Config_LoRaConfig_ModemPreset_VERY_LONG_SLOW:
-            return "VLongSlow";
         case meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_SLOW:
             return "MediumSlow";
         case meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_FAST:
@@ -1119,16 +1255,8 @@ std::string Mesh::preset_name() const
             return "ShortTurbo";
         case meshtastic_Config_LoRaConfig_ModemPreset_LONG_TURBO:
             return "LongTurbo";
-        case meshtastic_Config_LoRaConfig_ModemPreset_LITE_FAST:
-            return "LiteFast";
-        case meshtastic_Config_LoRaConfig_ModemPreset_LITE_SLOW:
-            return "LiteSlow";
-        case meshtastic_Config_LoRaConfig_ModemPreset_NARROW_FAST:
-            return "NarrowFast";
-        case meshtastic_Config_LoRaConfig_ModemPreset_NARROW_SLOW:
-            return "NarrowSlow";
         default:
-            return "Custom";
+            return "Invalid";
     }
 }
 
@@ -1197,7 +1325,11 @@ void Mesh::set_active_chat(const ChatKey* key)
     if (key) {
         active_ = *key;
         mark_read(*key);
-        if (key->dm) ensure_key(key->id);
+        if (key->dm) {
+            want_info(key->id, true, true);
+        } else {
+            ask_channel_senders(*key);
+        }
     }
 }
 

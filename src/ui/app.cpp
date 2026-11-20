@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ui/app.h"
 
+#include <cstdlib>
 #include <ctime>
 
 #include "common/util.h"
@@ -89,7 +90,6 @@ void App::start()
     lv_obj_set_style_pad_left(notice_, 5, 0);
     lv_obj_set_style_pad_top(notice_, 2, 0);
     lv_label_set_long_mode(notice_, LV_LABEL_LONG_DOT);
-    ui::set_bg(notice_, ui::c_accent());
     lv_obj_add_flag(notice_, LV_OBJ_FLAG_HIDDEN);
 
     push(make_tab(*this, kTabChats));
@@ -198,6 +198,8 @@ void App::handle_key(const Key& pressed)
         }
         if (key.k != K::Char) key.ch = 0;
     }
+    // A held key repeats only where it works as an arrow; in text it types once.
+    if (key.held && key.k == K::Char) return;
     // A key press also clears any message on screen; it is never swallowed.
     if (toast_until_ != 0 && (key.k == K::Esc || key.k == K::Enter)) {
         lv_obj_add_flag(toast_, LV_OBJ_FLAG_HIDDEN);
@@ -218,7 +220,8 @@ void App::handle_key(const Key& pressed)
                 esc_held_ms_ = now_ms();
                 notify("Keep holding Esc to exit");
             }
-        } else if (s->tab() >= 0 && !key.ctrl) {
+        } else if (s->tab() >= 0 && !key.ctrl && !key.held) {
+            // Holding Left or Right moves one tab, not through all of them.
             if (key.k == K::Tab || key.k == K::Right) switch_tab(s->tab() + 1);
             if (key.k == K::Left) switch_tab(s->tab() - 1);
             if (key.is_char('?')) push(make_help(*this));
@@ -241,6 +244,7 @@ void App::toast(const std::string& text, bool warn)
 void App::notify(const std::string& text)
 {
     ui::set_text(notice_, ui::clean(utf8_truncate(text, 120), true));
+    ui::set_bg(notice_, ui::c_accent());
     lv_obj_remove_flag(notice_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(notice_);
     notice_until_ = now_ms() + 4000;
@@ -278,7 +282,7 @@ void App::update_chrome()
         ui::set_text(title_, ui::clean(s->title(), true));
     }
 
-    // Right side: link state, satellites, clock.
+    // Right side: link state, satellites, battery, clock.
     std::string status;
     lv_color_t color = ui::c_dim();
     switch (mesh.state()) {
@@ -300,8 +304,17 @@ void App::update_chrome()
     if (status.empty()) {
         const meshtastic_NodeInfo* self = mesh.me();
         if (self && self->has_position && self->position.sats_in_view > 0) {
-            status += std::string(LV_SYMBOL_GPS) + std::to_string(self->position.sats_in_view) + "  ";
+            status += std::string(LV_SYMBOL_GPS) + std::to_string(self->position.sats_in_view) + " ";
         }
+        // The fuel gauge moves slowly; a look every 15 s is plenty. Single
+        // spaces leave room for the tabs.
+        const uint64_t now = now_ms();
+        if (battery_read_ms_ == 0 || now - battery_read_ms_ >= 15000) {
+            battery_read_ms_ = now;
+            const char* dir  = getenv("MESHZERO_POWER_SUPPLY_DIR");
+            battery_         = dir && dir[0] ? battery_percent(charging_, dir) : battery_percent(charging_);
+        }
+        if (battery_ >= 0) status += (charging_ ? LV_SYMBOL_CHARGE : "") + std::to_string(battery_) + "% ";
         const time_t t = time(nullptr);
         tm local{};
         localtime_r(&t, &local);
@@ -374,10 +387,30 @@ void App::tick()
         if (update::take_notice()) {
             notify(LV_SYMBOL_DOWNLOAD " MeshZero " + update::available() + " is available");
         }
-        // A radio without a region may not transmit: ask once, right away.
-        if (mesh.ready() && mesh.region_unset() && !region_prompted_) {
+        // Once a session, so that a radio which won't take it can't keep restarting.
+        if (mesh.ready() && mesh.config.has_lora && !coding_rate_checked_) {
+            coding_rate_checked_ = true;
+            repair_coding_rate(*this);
+        }
+        // A radio without a region may not transmit, and one on a region MeshZero
+        // does not offer may transmit where it should not: ask once, right away.
+        if (mesh.ready() && mesh.config.has_lora && !region_supported(mesh.config.lora.region) && !region_prompted_) {
             region_prompted_ = true;
             push(make_region_picker(*this, true));
+        } else if (mesh.ready() && mesh.ask_background && !background_prompted_ && stack_.size() == 1) {
+            // The update switched running in the background off for this user.
+            // Offer it back, once a main page shows; Esc asks again next launch.
+            background_prompted_ = true;
+            push(make_confirm(*this, "Run in background",
+                              std::string("Running in background currently: ") + (mesh.background == 1 ? "ON" : "OFF") +
+                                  "\nMeshZero's background service can be set to stay active when you close the app. "
+                                  "It is great for keeping your node always online, but will prevent any other apps "
+                                  "from using your LoRa cap. Do you want the background service to remain active "
+                                  "when you exit?",
+                              {"Yes", "No"}, [this](int c) {
+                                  mesh.set_background(c == 0);
+                                  toast("Your option can be changed in SETUP any time.");
+                              }));
         }
         if (Screen* s = top()) s->refresh();
         update_chrome();

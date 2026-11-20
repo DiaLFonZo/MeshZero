@@ -197,6 +197,7 @@ public:
     }
     std::string title() const override { return LV_SYMBOL_LEFT " " + mesh.short_name(num_) + "  " + mesh.long_name(num_); }
     std::string hint() const override { return "Up/Down move   Enter select   Esc back"; }
+    void on_show() override { mesh.want_info(num_, false, true); }
 
     void refresh() override
     {

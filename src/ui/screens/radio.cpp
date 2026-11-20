@@ -79,11 +79,11 @@ public:
                 break;
         }
         if (mesh.network_access != 1) {
-            row("Network access", "off");
+            row("Network Access (LAN)", "off");
         } else {
             const std::vector<std::string> addrs = local_addresses();
-            if (addrs.empty()) row("Network access", "no network", true);
-            for (const auto& a : addrs) row("Network access", a + ":4403");
+            if (addrs.empty()) row("Network Access (LAN)", "no network", true);
+            for (const auto& a : addrs) row("Network Access (LAN)", a + ":4403");
         }
 
         if (mesh.ever_ready()) {
@@ -265,17 +265,20 @@ private:
 
 const char* const kHelp =
     "KEYS\n"
-    "Arrows: move (hold Fn only while typing)\n"
+    "Arrows: move, hold to repeat (hold Fn only while typing)\n"
     "Enter: open, edit, send\n"
     "Esc: back. Hold it for 2 seconds to exit\n"
     "Tab: next page\n"
+    "?: in Setup, explain the highlighted setting\n"
     "Settings: Esc asks to save\n\n"
     "MESSAGES\n"
-    "Green tick: delivered. Grey tick: relayed. Cross: failed.\n"
-    "To message someone, open them in Nodes.\n\n"
+    "Colored tick: delivered. Grey tick: relayed. Cross: failed.\n"
+    "To message someone, open them in Nodes.\n"
+    "Del on a chat in Chats, or Delete chat history in a message's menu, deletes its messages.\n\n"
     "OTHER APPS\n"
-    "The radio keeps running after you exit. To use it from MeshMonitor or a phone, turn on Network access in "
-    "Setup. The address is on the Radio page.\n\n"
+    "When you exit, the radio stops so other apps can use the LoRa cap, unless Run in background is on in Setup. "
+    "To use the radio from MeshMonitor or a phone, turn on Network Access (LAN) in Setup. The address is on the "
+    "Radio page.\n\n"
     "RADIO OFFLINE\n"
     "Power off, check the cap, power on. For details run:\n"
     "sudo -u meshzero meshzerod doctor\n\n"

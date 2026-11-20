@@ -21,6 +21,8 @@ struct Field {
     enum Type { Bool, Int, Enum, Text, Action, Info, Header } type = Info;
     std::string label;
     std::string help;
+    // What the setting does, in plain words; ? on the field shows it.
+    std::string about;
     std::string unit;
     std::function<int64_t()> get;
     std::function<void(int64_t)> set;
@@ -29,14 +31,29 @@ struct Field {
     std::function<std::string(const std::string&)> set_text;
     std::function<void()> run;
     std::vector<Opt> opts;
+    // Optional, Enum: options that depend on the working copy, used instead of opts.
+    std::function<std::vector<Opt>()> opts_of;
     int64_t min    = 0;
     int64_t max    = 0;
+    // Int: 0 is taken as well as min..max, where 0 stands for the radio's default.
+    bool zero_ok = false;
+    // Optional, Int: bounds that depend on the working copy. It is given min
+    // and max, and narrows or widens them.
+    std::function<void(int64_t& min, int64_t& max)> bounds;
+    // Optional, Int: what a value reads as instead of the number, or empty to
+    // show the number.
+    std::function<std::string(int64_t)> value_text;
     size_t max_len = 0;
     bool secret    = false;
     // Optional: something to add after the value shown (Enum), and what an
     // empty Text field reads as instead of "(empty)".
     std::function<std::string()> note;
     std::string empty_text;
+    // Optional, Text: why a value set_text would take needs the user's go-ahead
+    // first, asked in a dialog; empty when it does not.
+    std::function<std::string(const std::string&)> warn_text;
+    // Optional: help that depends on the working copy, shown instead of `help`.
+    std::function<std::string()> help_text;
     // Action rows normally leave the page clean; set when the action edits the working copy.
     bool marks_dirty = false;
 };

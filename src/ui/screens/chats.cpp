@@ -26,6 +26,19 @@ std::string time_str(uint32_t ts)
     return buf;
 }
 
+// Asks before deleting a conversation's messages, which cannot be undone.
+void confirm_delete_history(App& app, const ChatKey key)
+{
+    App* a = &app;
+    app.push(make_confirm(app, "Delete chat history",
+                          "Delete all messages in " + app.mesh.chat_title(key) + "? This can't be undone.",
+                          {"Cancel", "Delete"}, [a, key](int choice) {
+                              if (choice != 1) return;
+                              a->mesh.delete_history(key);
+                              a->toast("Chat history deleted");
+                          }));
+}
+
 // ------------------------------------------------------------ chat list
 
 class ChatsScreen : public Screen {
@@ -121,8 +134,8 @@ public:
     bool on_key(const Key& key) override
     {
         if (list_->handle_key(key)) return true;
+        const size_t i = static_cast<size_t>(list_->selected());
         if (key.k == K::Enter && mesh.ever_ready()) {
-            const size_t i = static_cast<size_t>(list_->selected());
             if (i < keys_.size()) {
                 if (keys_[i].dm && keys_[i].id == 0) {
                     app.switch_tab(kTabNodes);
@@ -130,6 +143,12 @@ public:
                     app.open_chat(keys_[i]);
                 }
             }
+            return true;
+        }
+        if ((key.k == K::Backspace || key.k == K::Delete) && i < keys_.size() && mesh.ever_ready()) {
+            const ChatKey k = keys_[i];
+            if (k.dm && k.id == 0) return true;  // "No direct messages"
+            if (!mesh.chat(k).msgs.empty()) confirm_delete_history(app, k);
             return true;
         }
         return false;
@@ -519,7 +538,7 @@ private:
         end_selection();
         const StoredMsg* m = message(r);
         if (!m) return;
-        enum Action { React, Reply, Details, Resend, NodeInfo };
+        enum Action { React, Reply, Details, Resend, NodeInfo, DeleteAll };
         std::vector<Action> what;
         std::vector<std::string> labels;
         const auto offer = [&](Action a, const char* label) {
@@ -534,6 +553,7 @@ private:
         offer(Details, "Details");
         if (m->outgoing && m->ack == AckState::Failed) offer(Resend, "Send again");
         if (!m->outgoing) offer(NodeInfo, "About the sender");
+        offer(DeleteAll, "Delete chat history");
         app.push(make_picker(app, LV_SYMBOL_LEFT " " + ui::clean(utf8_truncate(r.quote, 40), true), labels, -1,
                              [this, r, what](int choice) {
                                  if (choice < 0 || static_cast<size_t>(choice) >= what.size()) return;
@@ -554,6 +574,9 @@ private:
                                          break;
                                      case NodeInfo:
                                          app.push(make_node_detail(app, msg->from));
+                                         break;
+                                     case DeleteAll:
+                                         confirm_delete_history(app, key_);
                                          break;
                                  }
                              }));

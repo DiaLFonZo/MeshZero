@@ -98,6 +98,11 @@ private:
     uint64_t esc_held_ms_ = 0;  // since when Esc is held on a home page, 0 if it is not
     bool quit_          = false;
     bool region_prompted_ = false;
+    bool coding_rate_checked_ = false;
+    bool background_prompted_ = false;
+    int battery_ = -1;              // percent, -1 without a battery
+    bool charging_ = false;
+    uint64_t battery_read_ms_ = 0;  // when it was last read, 0 if never
 };
 
 // ---- screen factories (src/ui/screens) ------------------------------------
@@ -111,6 +116,11 @@ std::unique_ptr<Screen> make_chat(App& app, const ChatKey& key);
 std::unique_ptr<Screen> make_node_detail(App& app, uint32_t num);
 std::unique_ptr<Screen> make_packet_log(App& app);
 std::unique_ptr<Screen> make_region_picker(App& app, bool first_run);
+// Whether MeshZero offers a region: the cap and the radio firmware can use it.
+bool region_supported(int region);
+// Gives a radio on a preset that preset's own coding rate back, when it runs
+// another; true when it did. Asks the radio to restart.
+bool repair_coding_rate(App& app);
 std::unique_ptr<Screen> make_channels(App& app);
 std::unique_ptr<Screen> make_help(App& app);
 // Scrollable text ending in the credit line and a QR code for the link.

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -55,5 +56,10 @@ private:
 
 // Loads the rotated file followed by the current one, applying ack records.
 std::vector<StoredMsg> history_load(const std::string& path = history_path());
+
+// Rewrites both files without the messages `drop` picks, and without the
+// acknowledgements of those. Only the writer may call it. False when a file
+// could not be rewritten; what was already rewritten stays so.
+bool history_remove(const std::function<bool(const StoredMsg&)>& drop, const std::string& path = history_path());
 
 }  // namespace mz

@@ -2,11 +2,11 @@
   "app_name": "MeshZero",
   "package_name": "meshzero",
   "bin_name": "meshzero",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Meshtastic client for the CardputerZero and Cap LoRa-1262",
   "store": {
     "summary": "Meshtastic for the Cap LoRa-1262, with chat, DMs, node list and a Wi-Fi API",
-    "description": "A Meshtastic client for the CardputerZero with the Cap LoRa-1262.\n\n- Channel chat and direct messages, with delivery status. Messages that arrive while the app is closed are kept.\n- Node list with signal, hops, battery, distance and bearing. Traceroute, position requests, favourites, ignore.\n- Radar-style map of the nodes around you.\n- Settings for region, modem preset, channels and keys (with QR sharing), position, MQTT and more.\n\nThe radio keeps running after you leave the app. Turn on Network access and MeshMonitor, the meshtastic CLI and the phone apps can use it over Wi-Fi on port 4403, several at once.\n\nThe radio side is the official Meshtastic Linux daemon, so it works with any other Meshtastic device. Needs the Cap LoRa-1262. Power the device off before attaching it.\n\nNot affiliated with or endorsed by the Meshtastic project.",
+    "description": "A Meshtastic client for the CardputerZero with the Cap LoRa-1262.\n\n- Channel chat and direct messages, with delivery status. Messages that arrive while the app is closed are kept.\n- Node list with signal, hops, battery, distance and bearing. Traceroute, position requests, favourites, ignore.\n- Radar-style map of the nodes around you.\n- Settings for region, modem preset, channels and keys (with QR sharing), position, MQTT and more.\n\nThe radio can keep running after you leave the app if you turn on Run in background. Turn on Network Access (LAN) and MeshMonitor, the meshtastic CLI and the phone apps can use it over Wi-Fi on port 4403, several at once.\n\nThe radio side is the official Meshtastic Linux daemon, so it works with any other Meshtastic device. Needs the Cap LoRa-1262. Power the device off before attaching it.\n\nNot affiliated with or endorsed by the Meshtastic project.",
     "categories": [
       "Radio & Comms"
     ],

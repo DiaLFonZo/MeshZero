@@ -35,9 +35,9 @@ def wait_for(predicate, timeout=10.0, what="condition"):
     raise AssertionError("timed out waiting for " + what)
 
 
-def can_connect(host):
+def can_connect(host, port=API_PORT):
     try:
-        socket.create_connection((host, API_PORT), timeout=1).close()
+        socket.create_connection((host, port), timeout=1).close()
         return True
     except OSError:
         return False
@@ -91,8 +91,38 @@ def handshake(nonce, heartbeat=False):
         sock.close()
 
 
+def check_background_migration(daemon):
+    """Running in the background is off after the update to 0.2.1; whoever had
+    it on is asked about it once."""
+    cases = [
+        # files before the update, whether the app is to ask, what to expect
+        ("was switched on", {"background": "1\n"}, True, "0"),
+        ("was switched off", {"background": "0\n"}, False, "0"),
+        ("was on by default", {"radio-status": "ok\n"}, True, "0"),
+        ("new install", {}, False, "0"),
+        ("already updated", {"run-in-background": "1\n"}, False, "1"),
+    ]
+    for i, (name, files, ask, expected) in enumerate(cases):
+        state = Path(tempfile.mkdtemp(prefix="mzbg"))
+        for file, text in files.items():
+            (state / file).write_text(text)
+        proxy = subprocess.Popen([daemon, "serve", "--listen", "127.0.0.1", "--port", str(API_PORT + 10 + i),
+                                  "--radio-port", str(RADIO_PORT + 10 + i)], env=dict(os.environ, MESHZERO_STATE_DIR=str(state)),
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            wait_for(lambda: can_connect("127.0.0.1", API_PORT + 10 + i), what="daemon to start (%s)" % name)
+        finally:
+            proxy.terminate()
+            proxy.wait()
+        assert (state / "run-in-background").read_text() == expected + "\n", name
+        assert (state / "background-ask").exists() == ask, name
+        assert not (state / "background").exists(), name
+    print("ok: running in the background is off after the update, and asked about where it was on")
+
+
 def main():
     daemon = sys.argv[1] if len(sys.argv) > 1 else str(ROOT / "build/host/meshzerod")
+    check_background_migration(daemon)
     state = tempfile.mkdtemp(prefix="mzproxy")
     radio = subprocess.Popen([sys.executable, str(ROOT / "tools/fakeradio.py"), "--port", str(RADIO_PORT), "--quiet-mesh"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -179,6 +209,20 @@ def main():
         clients.remove(remote)
         remote.close()
         print("ok: network access is off by default and can be switched on and off")
+
+        # Choosing whether to run in the background, from the app or a shell,
+        # answers the question asked after the update.
+        background = Path(state) / "run-in-background"
+        ask = Path(state) / "background-ask"
+        assert background.read_text() == "0\n" and not ask.exists(), "running in the background is not off on a new install"
+        ask.write_text("1\n")
+        a.sendData(b"mz:bg=1", destinationId=0, portNum=256)
+        wait_for(lambda: background.read_text() == "1\n" and not ask.exists(), what="background on, question answered")
+        ask.write_text("1\n")
+        subprocess.run([daemon, "background", "off"], env=dict(os.environ, MESHZERO_STATE_DIR=state), check=True,
+                       stdout=subprocess.DEVNULL)
+        assert background.read_text() == "0\n" and not ask.exists()
+        print("ok: running in the background is off by default and choosing it answers the question")
 
         # Clients come and go without disturbing the others.
         b.close()

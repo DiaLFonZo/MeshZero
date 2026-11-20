@@ -121,6 +121,10 @@ public:
     Chat& chat(const ChatKey& key);
     void set_active_chat(const ChatKey* key);
     void mark_read(const ChatKey& key);
+    // Deletes the messages of one conversation, or of all, here and in the
+    // history the service keeps.
+    void delete_history(const ChatKey& key);
+    void delete_all_history();
     bool send_text(const ChatKey& key, const std::string& text, uint32_t reply_id = 0);
     // Reacts to the message with this packet id with an emoji.
     bool send_tapback(const ChatKey& key, uint32_t target_id, const std::string& emoji);
@@ -131,7 +135,11 @@ public:
     void request_nodeinfo(uint32_t dest);
     bool has_key(uint32_t num) const;
     bool awaiting_key(uint32_t num) const;
-    void ensure_key(uint32_t dest);
+    // Asks a node for its user record (names and public key) in the background,
+    // retrying with growing pauses, until it is known. `need_key` also waits for
+    // the public key. `user_waiting` marks a request someone is looking at the
+    // screen for: it goes first and is sent even when the channel is busy.
+    void want_info(uint32_t num, bool need_key, bool user_waiting, uint64_t delay_ms = 0);
     void request_telemetry(uint32_t dest);
 
     // ---- administration (local node) ---------------------------------
@@ -159,6 +167,9 @@ public:
     // Whether the radio keeps running with the app closed: -1 unknown, 0, 1.
     int background = -1;
     void set_background(bool on);
+    // Set while the user is to be asked whether to run in the background: the
+    // update to 0.2.1 switched it off for them. set_background() answers it.
+    bool ask_background = false;
 
     void toast(const std::string& text);
 
@@ -183,6 +194,11 @@ private:
     void save_read_state();
     void set_state(LinkState s);
     uint32_t next_id();
+    bool info_complete(uint32_t num, bool need_key) const;
+    bool channel_busy() const;
+    uint32_t send_info_request(uint32_t dest);
+    void ask_channel_senders(const ChatKey& key);
+    void pump_info_asks();
 
     std::string host_ = "127.0.0.1";
     uint16_t port_    = kDefaultApiPort;
@@ -204,11 +220,15 @@ private:
     ChatKey active_;
     std::map<uint32_t, ChatKey> pending_acks_;  // packet id -> conversation
     std::map<uint32_t, uint32_t> trace_ids_;    // request id -> destination
-    struct KeyAsk {
-        uint64_t at = 0;  // when it was last asked for
-        int tries   = 0;
+    struct InfoAsk {
+        uint64_t due  = 0;  // earliest time for the next request
+        uint64_t at   = 0;  // when it was last asked
+        int tries     = 0;
+        bool need_key = false;
+        bool urgent   = false;  // someone is waiting on the screen for it
     };
-    std::map<uint32_t, KeyAsk> key_asks_;  // node -> requests for its public key
+    std::map<uint32_t, InfoAsk> info_asks_;  // node -> automatic requests for its info
+    uint64_t next_info_ms_ = 0;              // earliest time for any automatic request
 };
 
 const char* portnum_name(int portnum);
@@ -217,5 +237,8 @@ const char* routing_error_name(int error);
 std::string delivery_error_text(int error);
 const char* hw_model_name(int model);
 const char* role_name(int role);
+// A modem preset's name as the radio firmware writes it, which is also the
+// name of that preset's public channel: "LongFast", "LongMod", ...
+std::string modem_preset_name(int preset);
 
 }  // namespace mz

@@ -2,11 +2,64 @@
 #include "ui/ui.h"
 
 #include <cstring>
+#include <fstream>
 #include <unordered_map>
 
+#include "common/util.h"
 #include "ui/fonts/fonts.h"
 
 namespace mz::ui {
+
+namespace {
+
+constexpr size_t kDefaultAccent = 3;  // Green
+size_t g_accent                 = kDefaultAccent;
+bool g_accent_loaded            = false;
+
+std::string appearance_file()
+{
+    return user_state_dir() + "/appearance";
+}
+
+}  // namespace
+
+const std::vector<Accent>& accents()
+{
+    static const std::vector<Accent> list = {
+        {"Red", 0xff7b72},  {"Orange", 0xffa657}, {"Yellow", 0xf2cc60}, {"Green", 0x67ea94},
+        {"Teal", 0x56d4dd}, {"Blue", 0x79c0ff},   {"Purple", 0xd2a8ff}, {"Pink", 0xf778ba},
+    };
+    return list;
+}
+
+size_t accent_index()
+{
+    if (!g_accent_loaded) {
+        g_accent_loaded = true;
+        std::ifstream in(appearance_file());
+        std::string key, value;
+        while (in >> key >> value) {
+            if (key != "accent") continue;
+            for (size_t i = 0; i < accents().size(); ++i) {
+                if (value == accents()[i].name) g_accent = i;
+            }
+        }
+    }
+    return g_accent;
+}
+
+void set_accent(size_t index)
+{
+    if (index >= accents().size()) return;
+    g_accent        = index;
+    g_accent_loaded = true;
+    make_dirs(user_state_dir());
+    std::ofstream out(appearance_file() + ".tmp", std::ios::trunc);
+    if (!out) return;
+    out << "accent " << accents()[index].name << '\n';
+    out.close();
+    rename((appearance_file() + ".tmp").c_str(), appearance_file().c_str());
+}
 
 lv_color_t c_bg()
 {
@@ -26,7 +79,7 @@ lv_color_t c_dim()
 }
 lv_color_t c_accent()
 {
-    return lv_color_hex(0x67ea94);
+    return lv_color_hex(accents()[accent_index()].rgb);
 }
 lv_color_t c_select()
 {
@@ -153,7 +206,10 @@ void update_scroll_hints(lv_obj_t* obj)
                 lv_obj_add_flag(hint, LV_OBJ_FLAG_HIDDEN);
             }
         }
-        if (on) lv_obj_move_foreground(hint);
+        if (on) {
+            lv_obj_set_style_text_color(hint, c_accent(), 0);
+            lv_obj_move_foreground(hint);
+        }
     };
     show(up, lv_obj_get_scroll_top(obj) > 2);
     show(down, lv_obj_get_scroll_bottom(obj) > 2);
