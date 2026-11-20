@@ -96,7 +96,10 @@ public:
         lv_obj_set_width(l, kContentW - 16);
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
         const int list_h = static_cast<int>(options_.size()) * ui::kRowH;
-        list_            = std::make_unique<ui::ListView>(root, 0, kContentH - list_h - 2, kContentW, list_h);
+        // A message too long for the space above the options takes the small font.
+        lv_obj_update_layout(l);
+        if (lv_obj_get_height(l) > kContentH - list_h - 2 - 6) lv_obj_set_style_text_font(l, ui::font_small(), 0);
+        list_ = std::make_unique<ui::ListView>(root, 0, kContentH - list_h - 2, kContentW, list_h);
         std::vector<ui::ListItem> items;
         for (const auto& o : options_) {
             ui::ListItem it;

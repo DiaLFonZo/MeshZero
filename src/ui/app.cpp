@@ -383,10 +383,15 @@ void App::tick()
             // Offer it back, once a main page shows; Esc asks again next launch.
             background_prompted_ = true;
             push(make_confirm(*this, "Run in background",
-                              "Running in the background is now off: closing MeshZero frees the LoRa cap for other "
-                              "apps.\nTurn it on to keep receiving messages while MeshZero is closed. Other LoRa "
-                              "apps can't use the cap while it runs.",
-                              {"Keep it off", "Turn it on"}, [this](int c) { mesh.set_background(c == 1); }));
+                              std::string("Running in background currently: ") + (mesh.background == 1 ? "ON" : "OFF") +
+                                  "\nMeshZero's background service can be set to stay active when you close the app. "
+                                  "It is great for keeping your node always online, but will prevent any other apps "
+                                  "from using your LoRa cap. Do you want the background service to remain active "
+                                  "when you exit?",
+                              {"Yes", "No"}, [this](int c) {
+                                  mesh.set_background(c == 0);
+                                  toast("Your option can be changed in SETUP any time.");
+                              }));
         }
         if (Screen* s = top()) s->refresh();
         update_chrome();
