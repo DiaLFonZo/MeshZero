@@ -11,7 +11,6 @@ What was meant to be a couple of bug fixes became an entire minor release with n
 - **Message menu:** Click Up (Fn + F) to enter select messages and select one to see actions.
 - **Message details:** Sender, time, hops, signal, encryption, delivery status, reactions, etc.
 - **QR scanning:** Add channels by scanning a code with the camera. Compatible with most config generators, the official app, etc.
-- **Automatic key requests:** Direct messages ask the other node for its public key, backing off when unanswered.
 - **Radio settings from links:** A channel link or QR code that carries radio settings can be applied as a whole.
 - **Community setups (experimental):** Allows meshtastic communities to submit their
 custom radio/channel configurations to the app so you can have a one click setup experience.
@@ -19,10 +18,11 @@ custom radio/channel configurations to the app so you can have a one click setup
 - **Scroll arrows:** Lists and text pages show when there is more above or below.
 
 **Fixed**
-- **Older cap support:** Properly detects the older model of LoRa cap. (issue #2)
-- **Android app could not connect** Repeatedly connecting and failing during node retrieval (issue #3).
 - **iOS app dropped the connection** Would disconnect every so many seconds due to
 missing heartbeat (issue #1)
+- **Older cap support:** Properly detects the older model of LoRa cap. (issue #2)
+- **Android app could not connect** Repeatedly connecting and failing during node retrieval (issue #3).
+- **Automatic key requests:** Direct messages ask the other node for its public key, backing off when unanswered instead of waiting around for it.
 
 **Changed**
 
