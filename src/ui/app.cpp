@@ -198,6 +198,8 @@ void App::handle_key(const Key& pressed)
         }
         if (key.k != K::Char) key.ch = 0;
     }
+    // A held key repeats only where it works as an arrow; in text it types once.
+    if (key.held && key.k == K::Char) return;
     // A key press also clears any message on screen; it is never swallowed.
     if (toast_until_ != 0 && (key.k == K::Esc || key.k == K::Enter)) {
         lv_obj_add_flag(toast_, LV_OBJ_FLAG_HIDDEN);
@@ -218,7 +220,8 @@ void App::handle_key(const Key& pressed)
                 esc_held_ms_ = now_ms();
                 notify("Keep holding Esc to exit");
             }
-        } else if (s->tab() >= 0 && !key.ctrl) {
+        } else if (s->tab() >= 0 && !key.ctrl && !key.held) {
+            // Holding Left or Right moves one tab, not through all of them.
             if (key.k == K::Tab || key.k == K::Right) switch_tab(s->tab() + 1);
             if (key.k == K::Left) switch_tab(s->tab() - 1);
             if (key.is_char('?')) push(make_help(*this));

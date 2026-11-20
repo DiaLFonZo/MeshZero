@@ -11,8 +11,33 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+#include "common/util.h"
+
 namespace mz {
 namespace {
+
+// A held arrow key repeats after this long, then this often.
+constexpr uint64_t kRepeatDelayMs = 400;
+constexpr uint64_t kRepeatEveryMs = 70;
+
+// The arrows, and the letters that carry their legends: those work as arrows
+// wherever no text is typed, which the app decides.
+bool repeats(uint16_t code)
+{
+    switch (code) {
+        case KEY_UP:
+        case KEY_DOWN:
+        case KEY_LEFT:
+        case KEY_RIGHT:
+        case KEY_F:
+        case KEY_X:
+        case KEY_Z:
+        case KEY_C:
+            return true;
+        default:
+            return false;
+    }
+}
 
 // Key codes the TCA8418 keypad driver emits for its Sym layer. They reuse
 // unrelated Linux key codes, so they must be checked before the generic map.
@@ -124,6 +149,10 @@ void Keypad::poll(std::deque<Key>& out)
             if (ev.type == EV_KEY) handle(ev.code, ev.value, out);
         }
     }
+    if (held_code_ != 0 && now_ms() >= next_repeat_ms_) {
+        out.push_back(held_key_);
+        next_repeat_ms_ = now_ms() + kRepeatEveryMs;
+    }
 }
 
 void Keypad::handle(uint16_t code, int32_t value, std::deque<Key>& out)
@@ -147,6 +176,9 @@ void Keypad::handle(uint16_t code, int32_t value, std::deque<Key>& out)
         default:
             break;
     }
+    if (value == 0 && code == held_code_) held_code_ = 0;
+    // Held arrows are repeated in poll(), at the same pace whatever the keyboard.
+    if (value == 2 && repeats(code)) return;
     if (value == 0) {
         // Releases carry no information for us, except for the key that is held to exit.
         if (code == KEY_ESC) {
@@ -167,6 +199,7 @@ void Keypad::handle(uint16_t code, int32_t value, std::deque<Key>& out)
         key.k  = K::Char;
         key.ch = static_cast<uint8_t>(s);
         out.push_back(key);
+        held_code_ = 0;
         return;
     }
     switch (code) {
@@ -225,7 +258,17 @@ void Keypad::handle(uint16_t code, int32_t value, std::deque<Key>& out)
             }
             break;
     }
-    if (key.k != K::None) out.push_back(key);
+    if (key.k == K::None) return;
+    out.push_back(key);
+    // A new press ends the repeat of another key; an arrow starts its own.
+    held_code_ = 0;
+    if (value == 1 && repeats(code)) {
+        held_code_      = code;
+        held_key_       = key;
+        held_key_.repeat = true;
+        held_key_.held   = true;
+        next_repeat_ms_ = now_ms() + kRepeatDelayMs;
+    }
 }
 
 bool key_from_name(const std::string& name, Key& out)
