@@ -378,6 +378,15 @@ void App::tick()
         if (mesh.ready() && mesh.region_unset() && !region_prompted_) {
             region_prompted_ = true;
             push(make_region_picker(*this, true));
+        } else if (mesh.ready() && mesh.ask_background && !background_prompted_ && stack_.size() == 1) {
+            // The update switched running in the background off for this user.
+            // Offer it back, once a main page shows; Esc asks again next launch.
+            background_prompted_ = true;
+            push(make_confirm(*this, "Run in background",
+                              "Running in the background is now off: closing MeshZero frees the LoRa cap for other "
+                              "apps.\nTurn it on to keep receiving messages while MeshZero is closed. Other LoRa "
+                              "apps can't use the cap while it runs.",
+                              {"Keep it off", "Turn it on"}, [this](int c) { mesh.set_background(c == 1); }));
         }
         if (Screen* s = top()) s->refresh();
         update_chrome();

@@ -1250,15 +1250,15 @@ public:
         entry("Power", "", open(page_power));
         entry("Network", "", open(page_network));
         entry("Security", "", open(page_security));
-        entry("Run in background", mesh.background == 0 ? "off" : "on", [a, m]() {
+        entry("Run in background", mesh.background == 1 ? "on" : "off", [a, m]() {
             if (m->background < 0) {
                 a->toast("Radio offline", true);
                 return;
             }
             a->push(make_confirm(*a, "Run in background",
                                  "Keep the radio on when MeshZero is closed, to receive messages and relay for the "
-                                 "mesh. Turn off to free the LoRa cap for other apps.",
-                                 {"On", "Off"}, [m](int c) { m->set_background(c == 0); }));
+                                 "mesh. While it is on, other LoRa apps can't use the cap.",
+                                 {"Off", "On"}, [m](int c) { m->set_background(c == 1); }));
         });
         entry("Network access", mesh.network_access == 1 ? "on" : "off", [a, m]() {
             if (m->network_access < 0) {

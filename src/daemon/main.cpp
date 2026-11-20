@@ -135,20 +135,66 @@ bool write_network_access(bool on)
     return write_flag(access_path(), on);
 }
 
-// Whether the radio keeps running while no app is using it. On unless
-// switched off, so that messages are received with the app closed.
+bool exists(const std::string& path)
+{
+    return access(path.c_str(), F_OK) == 0;
+}
+
+// Whether the radio keeps running while no app is using it. Off unless
+// switched on: while it runs, other apps cannot use the LoRa cap.
 std::string background_path()
 {
-    return history_dir() + "/background";
+    return history_dir() + "/run-in-background";
 }
 
 bool read_background()
 {
     FILE* f = fopen(background_path().c_str(), "r");
-    if (!f) return true;
+    if (!f) return false;
     const int ch = fgetc(f);
     fclose(f);
-    return ch != '0';
+    return ch == '1';
+}
+
+// Present while the app is to ask the user whether to run in the background,
+// after the update that switched it off for them.
+std::string background_ask_path()
+{
+    return history_dir() + "/background-ask";
+}
+
+// Sets running in the background as the user chose it, which also answers
+// the question above.
+bool write_background(bool on)
+{
+    unlink(background_ask_path().c_str());
+    return write_flag(background_path(), on);
+}
+
+// Up to 0.2.0 running in the background was on unless switched off, kept in a
+// file named "background". The update switches it off for everybody; whoever
+// had it on is asked in the app, once, whether to have it back.
+void migrate_background()
+{
+    if (exists(background_path())) return;
+    const std::string old_path = history_dir() + "/background";
+    bool was_on                = false;
+    if (FILE* f = fopen(old_path.c_str(), "r")) {
+        was_on = fgetc(f) != '0';
+        fclose(f);
+    } else {
+        // Never switched, so it was on wherever the radio has run before.
+        was_on = exists(history_dir() + "/radio-status") || exists(history_dir() + "/radio") || exists(history_path());
+    }
+    if (was_on && !write_flag(background_ask_path(), true)) {
+        logf("cannot save %s: %s", background_ask_path().c_str(), strerror(errno));
+    }
+    if (!write_flag(background_path(), false)) {
+        logf("cannot save %s: %s", background_path().c_str(), strerror(errno));
+        return;
+    }
+    unlink(old_path.c_str());
+    if (was_on) logf("running in the background is now off until the user turns it back on");
 }
 
 class Proxy {
@@ -214,7 +260,7 @@ private:
     uint64_t last_access_check_ms_ = 0;
     uint64_t last_radio_watch_ms_  = 0;
     uint64_t last_client_ms_       = 0;
-    bool background_               = true;
+    bool background_               = false;
 
     // The radio daemon, when this process runs it (radio_cmd_ set).
     std::string radio_cmd_;
@@ -864,7 +910,8 @@ void Proxy::send_control(Client& c)
     p.which_payload_variant   = meshtastic_MeshPacket_decoded_tag;
     p.decoded.portnum         = meshtastic_PortNum_PRIVATE_APP;
     for (const std::string& setting : {std::string("net=") + (net_access_ ? "1" : "0"),
-                                       std::string("bg=") + (background_ ? "1" : "0")}) {
+                                       std::string("bg=") + (background_ ? "1" : "0"),
+                                       std::string("bgask=") + (exists(background_ask_path()) ? "1" : "0")}) {
         const std::string text = kControlPrefix + setting;
         memcpy(p.decoded.payload.bytes, text.data(), text.size());
         p.decoded.payload.size = static_cast<pb_size_t>(text.size());
@@ -885,7 +932,7 @@ void Proxy::on_control(Client& c, const std::string& request)
     }
     if (request == "bg=1" || request == "bg=0") {
         background_ = request == "bg=1";
-        if (!write_flag(background_path(), background_)) logf("cannot save %s: %s", background_path().c_str(), strerror(errno));
+        if (!write_background(background_)) logf("cannot save %s: %s", background_path().c_str(), strerror(errno));
         logf("running in the background %s", background_ ? "on" : "off");
         watch_radio(true);
         for (auto& other : clients_) {
@@ -1107,7 +1154,8 @@ void usage()
             "  meshzerod network on|off|status let other devices on the network use the API\n"
             "  meshzerod hw on|off|status      control power and antenna switch of the LoRa cap\n"
             "  meshzerod hw present            exit 1 when no LoRa cap is attached\n"
-            "  meshzerod background on|off|status keep the radio running when no app is using it\n"
+            "  meshzerod background on|off|status keep the radio running when no app is using it (off by\n"
+            "                                  default; while on, other apps cannot use the LoRa cap)\n"
             "  meshzerod doctor                check that everything the radio needs is present\n\n"
             "Environment: MESHZERO_API_BIND, MESHZERO_API_PORT, MESHZERO_RADIO_PORT, MESHZERO_STATE_DIR\n");
 }
@@ -1138,12 +1186,13 @@ int main(int argc, char** argv)
         }
         if (cmd == "background") {
             const std::string action = i < argc ? argv[i] : "status";
-            if ((action == "on" || action == "off") && !write_flag(background_path(), action == "on")) {
+            if ((action == "on" || action == "off") && !write_background(action == "on")) {
                 fprintf(stderr, "cannot write %s: %s\nRun it as the service user: sudo -u meshzero meshzerod background %s\n",
                         background_path().c_str(), strerror(errno), action.c_str());
                 return 1;
             }
-            printf("Run in background: %s\n", read_background() ? "on" : "off (radio stops when no app is using it)");
+            printf("Run in background: %s\n", read_background() ? "on (other apps cannot use the LoRa cap)"
+                                                                : "off (radio stops when no app is using it)");
             return 0;
         }
         if (cmd == "network") {
@@ -1189,6 +1238,7 @@ int main(int argc, char** argv)
     setvbuf(stderr, nullptr, _IOLBF, 0);
 
     mkdir(history_dir().c_str(), 0755);
+    migrate_background();
 
     Proxy proxy(radio_host, static_cast<uint16_t>(radio_port), bind_addr, static_cast<uint16_t>(listen_port));
     proxy.set_network_access(read_network_access());

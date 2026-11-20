@@ -98,6 +98,7 @@ private:
     uint64_t esc_held_ms_ = 0;  // since when Esc is held on a home page, 0 if it is not
     bool quit_          = false;
     bool region_prompted_ = false;
+    bool background_prompted_ = false;
 };
 
 // ---- screen factories (src/ui/screens) ------------------------------------

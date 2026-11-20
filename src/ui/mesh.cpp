@@ -472,6 +472,8 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
             network_access = text.back() == '1' ? 1 : 0;
         } else if (text == "mz:bg=1" || text == "mz:bg=0") {
             background = text.back() == '1' ? 1 : 0;
+        } else if (text == "mz:bgask=1" || text == "mz:bgask=0") {
+            ask_background = text.back() == '1';
         }
         ++rev_link;
         ++rev_config;

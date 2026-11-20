@@ -163,6 +163,9 @@ public:
     // Whether the radio keeps running with the app closed: -1 unknown, 0, 1.
     int background = -1;
     void set_background(bool on);
+    // Set while the user is to be asked whether to run in the background: the
+    // update to 0.2.1 switched it off for them. set_background() answers it.
+    bool ask_background = false;
 
     void toast(const std::string& text);
 
