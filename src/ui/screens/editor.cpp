@@ -176,7 +176,7 @@ public:
         }
         list_->set_items(items);
         const size_t i = static_cast<size_t>(list_->selected());
-        ui::set_text(help_, i < fields_.size() ? fields_[i].help : "");
+        ui::set_text(help_, i < fields_.size() ? help_of(fields_[i]) : "");
     }
 
     bool on_key(const Key& key) override
@@ -243,14 +243,16 @@ public:
                 break;
             }
             case Field::Text:
-                app.push(make_input(app, f.label, f.get_text(), f.max_len, f.help, [this, i](const std::string& text) {
-                    const std::string error = fields_[i].set_text(text);
-                    if (!error.empty()) {
-                        app.toast(error, true);
-                        return false;
-                    }
-                    dirty_ = true;
-                    return true;
+                app.push(make_input(app, f.label, f.get_text(), f.max_len, help_of(f), [this, i](const std::string& text) {
+                    const Field& field        = fields_[i];
+                    const std::string warning = field.warn_text ? field.warn_text(text) : std::string();
+                    if (warning.empty()) return take_text(i, text);
+                    // Cancel comes first so a hurried Enter goes back to the input.
+                    app.push(make_confirm(app, field.label, warning, {"Cancel", "I understand, use it"},
+                                          [this, i, text](int choice) {
+                                              if (choice == 1 && take_text(i, text)) app.pop();
+                                          }));
+                    return false;
                 }));
                 break;
             case Field::Action:
@@ -264,6 +266,20 @@ public:
     }
 
 private:
+    static std::string help_of(const Field& f) { return f.help_text ? f.help_text() : f.help; }
+
+    // Gives a Text field the value typed in; false, with the reason shown, if it refuses it.
+    bool take_text(size_t i, const std::string& text)
+    {
+        const std::string error = fields_[i].set_text(text);
+        if (!error.empty()) {
+            app.toast(error, true);
+            return false;
+        }
+        dirty_ = true;
+        return true;
+    }
+
     static std::string utf8_cut(const std::string& s, size_t n)
     {
         if (s.size() <= n) return s;

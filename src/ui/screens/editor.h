@@ -37,6 +37,11 @@ struct Field {
     // empty Text field reads as instead of "(empty)".
     std::function<std::string()> note;
     std::string empty_text;
+    // Optional, Text: why a value set_text would take needs the user's go-ahead
+    // first, asked in a dialog; empty when it does not.
+    std::function<std::string(const std::string&)> warn_text;
+    // Optional: help that depends on the working copy, shown instead of `help`.
+    std::function<std::string()> help_text;
     // Action rows normally leave the page clean; set when the action edits the working copy.
     bool marks_dirty = false;
 };

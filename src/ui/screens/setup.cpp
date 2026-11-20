@@ -74,8 +74,8 @@ bool region_band(int value, double& low, double& high)
         if (r.value != value) continue;
         for (const char* p = r.band; *p; ++p) {
             if (*p < '0' || *p > '9') continue;
-            float a = 0, b = 0;
-            if (sscanf(p, "%f-%f MHz", &a, &b) == 2 && b >= a) {
+            double a = 0, b = 0;
+            if (sscanf(p, "%lf-%lf MHz", &a, &b) == 2 && b >= a) {
                 low  = a;
                 high = b;
                 return true;
@@ -85,6 +85,44 @@ bool region_band(int value, double& low, double& high)
         }
     }
     return false;
+}
+
+// What the radio daemon can tune the SX1262 to, in MHz; RadioLib refuses
+// anything else. A fixed frequency may be set anywhere in it.
+constexpr double kRadioMinMHz = 150.0;
+constexpr double kRadioMaxMHz = 960.0;
+
+// Whether a frequency is in a region's band, edges included. The radio keeps
+// it as a float, a few Hz from what was typed, so the edges get a little
+// slack. True for a region whose band is not known.
+bool in_band(int region, double mhz)
+{
+    double low = 0, high = 0;
+    if (!region_band(region, low, high)) return true;
+    return mhz >= low - 0.0001 && mhz <= high + 0.0001;
+}
+
+// A frequency in MHz as typed: up to 0.1 kHz, no trailing zeros.
+std::string mhz_text(double mhz)
+{
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%.4f", mhz);
+    std::string text = buf;
+    while (text.back() == '0') text.pop_back();
+    if (text.back() == '.') text.pop_back();
+    return text;
+}
+
+// A fixed frequency typed in, in MHz, or 0 for none (automatic). False when
+// it is not a number the radio can tune to.
+bool parse_mhz(const std::string& s, double& mhz)
+{
+    const std::string text = trim(s);
+    mhz                    = 0;
+    if (text.empty()) return true;
+    char* end = nullptr;
+    mhz       = strtod(text.c_str(), &end);
+    return end != text.c_str() && *end == 0 && mhz >= kRadioMinMHz && mhz <= kRadioMaxMHz;
 }
 
 std::vector<Opt> region_opts()
@@ -223,13 +261,24 @@ meshtastic_Config_LoRaConfig lora_cleaned(const meshtastic_Config_LoRaConfig& be
         if (l.frequency_offset == before.frequency_offset) l.frequency_offset = 0;
     }
     if (region_changed && l.channel_num == before.channel_num) l.channel_num = 0;
-    // Whatever the history, a fixed frequency outside the region's band does not go to the radio.
-    double low = 0, high = 0;
-    if (l.override_frequency != 0 && region_band(l.region, low, high) &&
-        (l.override_frequency < low - 0.001 || l.override_frequency > high + 0.001)) {
+    // One outside the region's band stays: the user agreed to it when they set
+    // it, or the radio already runs on it. One the radio cannot tune to does not go to it.
+    if (l.override_frequency != 0 && (l.override_frequency < kRadioMinMHz || l.override_frequency > kRadioMaxMHz)) {
         l.override_frequency = 0;
     }
     return l;
+}
+
+// What the user is told, and has to accept, before a fixed frequency outside
+// the region's band is taken.
+std::string out_of_band_warning(int region, double mhz)
+{
+    double low = 0, high = 0;
+    region_band(region, low, high);
+    return mhz_text(mhz) + " MHz is outside the " + region_name(region) + " range of " + mhz_text(low) + "-" +
+           mhz_text(high) +
+           " MHz.\nTransmitting there may be against the law where you are, and the radio may not work as "
+           "expected or reach other nodes.";
 }
 
 std::unique_ptr<Screen> page_lora(App& app)
@@ -237,8 +286,19 @@ std::unique_ptr<Screen> page_lora(App& app)
     auto cfg    = std::make_shared<meshtastic_Config_LoRaConfig>(app.mesh.config.lora);
     auto before = std::make_shared<meshtastic_Config_LoRaConfig>(app.mesh.config.lora);
     std::vector<Field> f;
-    f.push_back(MZ_ENUM("Region", region, region_opts(),
-                        "Required to transmit"));
+    f.push_back(f_enum(
+        "Region", [cfg]() { return static_cast<int64_t>(cfg->region); },
+        [&app, cfg](int64_t v) {
+            const auto region = static_cast<Region>(v);
+            if (region == cfg->region) return;
+            cfg->region = region;
+            // A fixed frequency outside the new band was never agreed to for this region.
+            if (cfg->override_frequency != 0 && !in_band(region, cfg->override_frequency)) {
+                cfg->override_frequency = 0;
+                app.toast("Fixed frequency cleared: outside " + region_name(region));
+            }
+        },
+        region_opts(), "Required to transmit"));
     // One row says what the radio runs on: a preset, or values of its own.
     f.push_back(f_enum(
         "Modem", [cfg]() { return static_cast<int64_t>(cfg->use_preset ? preset_info(cfg->modem_preset).value : kCustomModem); },
@@ -286,37 +346,37 @@ std::unique_ptr<Screen> page_lora(App& app)
             cfg->coding_rate = static_cast<decltype(cfg->coding_rate)>(v);
         },
         5, 8, "", "Changing it makes the modem Custom. 5-8 (4/5 to 4/8)"));
+    // The region's band is what is suggested; outside it the user is warned
+    // and may go ahead, as far as the radio can tune.
     f.push_back(f_text(
         "Fixed frequency (MHz)",
-        [cfg]() {
-            if (cfg->override_frequency == 0) return std::string();
-            char buf[24];
-            snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(cfg->override_frequency));
-            std::string text = buf;
-            while (text.back() == '0') text.pop_back();
-            if (text.back() == '.') text.pop_back();
-            return text;
-        },
+        [cfg]() { return cfg->override_frequency == 0 ? std::string() : mhz_text(cfg->override_frequency); },
         [cfg](const std::string& s) {
-            const std::string text = trim(s);
-            if (text.empty()) {
-                cfg->override_frequency = 0;
-                return std::string();
+            double mhz = 0;
+            if (!parse_mhz(s, mhz)) {
+                return "A frequency from " + mhz_text(kRadioMinMHz) + " to " + mhz_text(kRadioMaxMHz) +
+                       " MHz, e.g. 869.618";
             }
-            char* end          = nullptr;
-            const double value = strtod(text.c_str(), &end);
-            if (end == text.c_str() || *end != 0 || value < 137 || value > 3000) return std::string("A frequency in MHz, e.g. 869.618");
-            double low = 0, high = 0;
-            if (region_band(cfg->region, low, high) && (value < low || value > high)) {
-                char range[64];
-                snprintf(range, sizeof(range), "%s allows %g to %g MHz", region_name(cfg->region).c_str(), low, high);
-                return std::string(range);
-            }
-            cfg->override_frequency = static_cast<float>(value);
+            cfg->override_frequency = static_cast<float>(mhz);
             return std::string();
         },
-        12, "Empty = automatic. Must be legal in your region"));
+        12, "Empty = automatic"));
     f.back().empty_text = "automatic";
+    f.back().help_text  = [cfg]() {
+        double low = 0, high = 0;
+        if (!region_band(cfg->region, low, high)) return std::string("Empty = automatic");
+        return "Empty = automatic. " + region_name(cfg->region) + " range: " + mhz_text(low) + "-" + mhz_text(high) +
+               " MHz";
+    };
+    // Nothing to ask about a value refused anyway, automatic, in the band, or already set.
+    f.back().warn_text = [cfg](const std::string& s) {
+        double mhz = 0;
+        if (!parse_mhz(s, mhz) || mhz == 0 || in_band(cfg->region, mhz) ||
+            static_cast<float>(mhz) == cfg->override_frequency) {
+            return std::string();
+        }
+        return out_of_band_warning(cfg->region, mhz);
+    };
     return make_editor(
         app, "LoRa radio", std::move(f),
         [&app, cfg, before]() {
