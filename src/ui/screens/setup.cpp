@@ -7,6 +7,8 @@
 #include <optional>
 #include <random>
 
+#include <unistd.h>
+
 #include "common/util.h"
 #include "meshtastic/apponly.pb.h"
 #include "ui/camera.h"
@@ -343,15 +345,6 @@ void make_custom(meshtastic_Config_LoRaConfig& l, const meshtastic_Config_LoRaCo
     l.use_preset        = false;
 }
 
-// The protocol rounds a position to a grid; these are the cell sizes other
-// Meshtastic apps offer. 0 stops position being sent on the channel at all.
-std::vector<Opt> precision_opts()
-{
-    return {{0, "Off"},          {10, "Within 23 km"}, {11, "Within 12 km"}, {12, "Within 5.8 km"},
-            {13, "Within 2.9 km"}, {14, "Within 1.5 km"}, {15, "Within 700 m"}, {16, "Within 350 m"},
-            {17, "Within 180 m"}, {18, "Within 90 m"},  {19, "Within 45 m"},  {32, "Exact"}};
-}
-
 // The longest interval the radio firmware keeps, in seconds. It stands for
 // never there (MAX_INTERVAL), though it counts it as about 24 days.
 constexpr int64_t kMaxInterval = 2147483647;
@@ -441,6 +434,27 @@ void public_interval(Field& f, std::function<bool()> applies, std::function<int6
     };
 }
 
+// The protocol rounds a position to a grid; these are the cell sizes other
+// Meshtastic apps offer, as the radio firmware's own menu words them. 0
+// stops position being sent on the channel at all. A value set elsewhere
+// shows as the number of bits kept.
+std::vector<Opt> precision_opts(uint32_t current)
+{
+    return with_current({{0, "Off"},
+                         {10, "Within 23 km"},
+                         {11, "Within 12 km"},
+                         {12, "Within 5.8 km"},
+                         {13, "Within 2.9 km"},
+                         {14, "Within 1.5 km"},
+                         {15, "Within 700 m"},
+                         {16, "Within 350 m"},
+                         {17, "Within 200 m"},
+                         {18, "Within 90 m"},
+                         {19, "Within 50 m"},
+                         {32, "Precise"}},
+                        current, current > 32 ? "Precise" : std::to_string(current) + " bits");
+}
+
 const char* const kRestartNote = "Saved. Radio restarting.";
 
 void send_config(Mesh& mesh, const meshtastic_Config& c)
@@ -464,7 +478,15 @@ std::unique_ptr<Screen> page_user(App& app)
     auto cfg = std::make_shared<meshtastic_User>();
     if (const meshtastic_NodeInfo* self = app.mesh.me(); self && self->has_user) *cfg = self->user;
     std::vector<Field> f;
-    f.push_back(MZ_TEXT("Long name", long_name, "", false));
+    // The radio firmware keeps the old name when it is sent an empty one.
+    f.push_back(f_text(
+        "Long name", [cfg]() { return std::string(cfg->long_name); },
+        [cfg](const std::string& s) {
+            if (s.empty()) return std::string("Long name can't be empty");
+            snprintf(cfg->long_name, sizeof(cfg->long_name), "%s", s.c_str());
+            return std::string();
+        },
+        sizeof(cfg->long_name) - 1));
     f.back().about = "Your node's name, as others see it in their node lists and chats.";
     f.push_back(f_text(
         "Short name", [cfg]() { return std::string(cfg->short_name); },
@@ -846,7 +868,7 @@ std::unique_ptr<Screen> page_position(App& app)
             primary->settings.module_settings.position_precision = static_cast<uint32_t>(v);
             *primary_changed                                     = true;
         },
-        precision_opts(), "Primary channel. Others: Setup > Channels"));
+        precision_opts(primary->settings.module_settings.position_precision), "Primary channel. Others: Setup > Channels"));
     f.back().about = "How precisely your position is shared on the primary channel; Off shares none there. Other "
                      "channels have their own setting in Setup > Channels.";
     const Mesh* m        = &app.mesh;
@@ -1074,8 +1096,9 @@ std::unique_ptr<Screen> page_mqtt(App& app)
             cfg->has_map_report_settings                   = true;
             cfg->map_report_settings.publish_interval_secs = static_cast<uint32_t>(v);
         },
-        0, 86400, "s", "0 = default (1 h)"));
-    f.back().about = "How often the map report is sent. The firmware won't send it more often than once an hour.";
+        3600, kMaxInterval, "s", "0 = default (1 h), or 1 h at least"));
+    f.back().zero_ok = true;
+    f.back().about   = "How often the map report is sent. The firmware won't send it more often than once an hour.";
     return make_editor(
         app, "MQTT", std::move(f),
         [&app, cfg]() {
@@ -1090,29 +1113,39 @@ std::unique_ptr<Screen> page_mqtt(App& app)
 std::unique_ptr<Screen> page_telemetry(App& app)
 {
     auto cfg = std::make_shared<meshtastic_ModuleConfig_TelemetryConfig>(app.mesh.modules.telemetry);
+    const Mesh* m          = &app.mesh;
+    const auto on_public   = [m]() { return public_minimum(*m, MinimumFor::Telemetry); };
+    const auto minimum     = [m]() -> int64_t { return router_role(m->config.device.role) ? 43200 : 1800; };
+    const auto default_for = [m]() { return std::string(router_role(m->config.device.role) ? "12 h" : "1 h"); };
     std::vector<Field> f;
     f.push_back(MZ_BOOL("Send device metrics", device_telemetry_enabled, ""));
     f.back().about = "Sends this node's battery level, uptime and how busy the radio channel is to the mesh, so "
                      "others can see how it's doing.";
-    f.push_back(MZ_INT("Device metrics interval", device_update_interval, 0, 86400, "s", "0 = default (1 h)"));
-    f.back().about = "How often device metrics are sent. On a public channel the firmware won't go below 30 minutes.";
+    f.push_back(MZ_INT("Device metrics interval", device_update_interval, 1, kMaxInterval, "s", ""));
+    public_interval(f.back(), on_public, minimum, default_for);
+    f.back().about = "How often device metrics are sent. On a public channel the firmware won't go below 30 minutes, "
+                     "or 12 hours for a router.";
     f.push_back(MZ_BOOL("Environment sensors", environment_measurement_enabled, ""));
     f.back().about = "Sends readings from a temperature, humidity or pressure sensor connected to the radio. Without "
                      "one there's nothing to send.";
-    f.push_back(MZ_INT("Environment interval", environment_update_interval, 0, 86400, "s", "0 = default (1 h)"));
+    f.push_back(MZ_INT("Environment interval", environment_update_interval, 1, kMaxInterval, "s", ""));
+    public_interval(f.back(), on_public, minimum, default_for);
     f.back().about = "How often environment readings are sent. On a public channel the firmware won't go below 30 "
-                     "minutes.";
+                     "minutes, or 12 hours for a router.";
     f.push_back(MZ_BOOL("Power sensors", power_measurement_enabled, ""));
     f.back().about = "Sends readings from a voltage and current sensor connected to the radio. Without one there's "
                      "nothing to send.";
-    f.push_back(MZ_INT("Power interval", power_update_interval, 0, 86400, "s", "0 = default (1 h)"));
-    f.back().about = "How often power readings are sent. On a public channel the firmware won't go below 30 minutes.";
+    f.push_back(MZ_INT("Power interval", power_update_interval, 1, kMaxInterval, "s", ""));
+    public_interval(f.back(), on_public, minimum, default_for);
+    f.back().about = "How often power readings are sent. On a public channel the firmware won't go below 30 minutes, "
+                     "or 12 hours for a router.";
     f.push_back(MZ_BOOL("Air quality sensors", air_quality_enabled, ""));
     f.back().about = "Sends readings from an air quality (particle) sensor connected to the radio. Without one there's "
                      "nothing to send.";
-    f.push_back(MZ_INT("Air quality interval", air_quality_interval, 0, 86400, "s", "0 = default (1 h)"));
+    f.push_back(MZ_INT("Air quality interval", air_quality_interval, 1, kMaxInterval, "s", ""));
+    public_interval(f.back(), on_public, minimum, default_for);
     f.back().about = "How often air quality readings are sent. On a public channel the firmware won't go below 30 "
-                     "minutes.";
+                     "minutes, or 12 hours for a router.";
     return make_editor(
         app, "Telemetry", std::move(f),
         [&app, cfg]() {
@@ -1127,12 +1160,15 @@ std::unique_ptr<Screen> page_telemetry(App& app)
 std::unique_ptr<Screen> page_neighbor(App& app)
 {
     auto cfg = std::make_shared<meshtastic_ModuleConfig_NeighborInfoConfig>(app.mesh.modules.neighbor_info);
+    // The radio firmware saves anything under 4 h, 0 included, as 6 h. The
+    // page starts from 4 h instead, without counting as a change, so turning
+    // the module on saves that.
+    if (cfg->update_interval < 14400) cfg->update_interval = 14400;
     std::vector<Field> f;
     f.push_back(MZ_BOOL("Enabled", enabled, ""));
     f.back().about = "Reports which nodes this node hears directly, and how well, for mesh mapping tools.";
-    f.push_back(MZ_INT("Update interval", update_interval, 0, 86400, "s", "0 = default (6 h)"));
-    f.back().about = "How often the report is made. The firmware won't go below 4 hours; shorter values become 6 "
-                     "hours.";
+    f.push_back(MZ_INT("Update interval", update_interval, 14400, kMaxInterval, "s", "4 h at least"));
+    f.back().about = "How often the report is made. The firmware won't go below 4 hours.";
     f.push_back(MZ_BOOL("Send over LoRa", transmit_over_lora, ""));
     f.back().about = "Also sends the report over the radio to other nodes. Never on the default public channel: there "
                      "it only goes to apps connected to this node.";
@@ -1147,6 +1183,17 @@ std::unique_ptr<Screen> page_neighbor(App& app)
         kRestartNote);
 }
 
+// The radio firmware has no limit of its own on the messages it keeps, but
+// sets room for all of them aside when it starts, and fails if it can't. So
+// as many as half the system's memory holds, at a record's 272 bytes there.
+int64_t max_records()
+{
+    const long pages = sysconf(_SC_PHYS_PAGES);
+    const long size  = sysconf(_SC_PAGESIZE);
+    if (pages <= 0 || size <= 0) return UINT32_MAX;
+    return std::min<int64_t>(static_cast<int64_t>(pages) * size / 2 / 272, UINT32_MAX);
+}
+
 std::unique_ptr<Screen> page_store_forward(App& app)
 {
     auto cfg = std::make_shared<meshtastic_ModuleConfig_StoreForwardConfig>(app.mesh.modules.store_forward);
@@ -1155,16 +1202,17 @@ std::unique_ptr<Screen> page_store_forward(App& app)
     f.back().about = "Lets nodes catch up on text messages they missed: a server keeps recent ones and resends them on "
                      "request. On, but not as a server, this node is a client.";
     f.push_back(MZ_BOOL("Act as server", is_server, ""));
-    f.back().about = "Keeps the text messages this node hears and resends them to nodes that ask. Best on a node "
-                     "that is always on.";
+    f.back().about = "Keeps the text messages this node hears and resends them to nodes that ask, though not on a "
+                     "public channel. Best on a node that is always on.";
     f.push_back(MZ_BOOL("Heartbeat", heartbeat, ""));
     f.back().about = "Has the server announce itself every 15 minutes, so nodes nearby know it's there.";
-    f.push_back(MZ_INT("Records kept", records, 0, 100000, "", "0 = default"));
-    f.back().about = "How many messages the server keeps; when full, it starts over from the oldest. 0 uses up to "
-                     "three quarters of free memory.";
-    f.push_back(MZ_INT("Max messages returned", history_return_max, 0, 1000, "", "0 = default (25)"));
+    f.push_back(MZ_INT("Records kept", records, 0, max_records(), "", "0 = automatic"));
+    f.back().about = "How many messages the server keeps; when full, it starts over from the oldest. 0 lets the "
+                     "radio choose. At most, as many as half the system's memory holds.";
+    f.push_back(MZ_INT("Max messages returned", history_return_max, 0, UINT32_MAX, "", "0 = default (25)"));
     f.back().about = "The most messages the server sends back to a node per request.";
-    f.push_back(MZ_INT("History window", history_return_window, 0, 100000, "min", "0 = default (4 h)"));
+    // The radio works the window out in seconds, in 32 bits.
+    f.push_back(MZ_INT("History window", history_return_window, 0, UINT32_MAX / 60, "min", "0 = default (4 h)"));
     f.back().about = "How far back the server looks when a node asks for the messages it missed.";
     return make_editor(
         app, "Store & forward", std::move(f),
@@ -1184,7 +1232,7 @@ std::unique_ptr<Screen> page_range_test(App& app)
     f.push_back(MZ_BOOL("Enabled", enabled, ""));
     f.back().about = "Turns on range test: a sending node transmits numbered messages, and the numbers that arrive "
                      "show how far the radio reaches.";
-    f.push_back(MZ_INT("Send interval", sender, 0, 86400, "s", "0 = receive only"));
+    f.push_back(MZ_INT("Send interval", sender, 0, 28800, "s", "0 = receive only. Stops by itself after 8 h"));
     f.back().about = "How often this node sends a numbered test message. Sending stops by itself after 8 hours.";
     f.push_back(MZ_BOOL("Save results", save, ""));
     f.back().about = "Saves the test messages received to a file on the radio. Only ESP32 radios support this, so it "
@@ -1202,11 +1250,17 @@ std::unique_ptr<Screen> page_range_test(App& app)
 
 // --------------------------------------------------------------- channels
 
-std::string psk_summary(const meshtastic_ChannelSettings& s)
+// How a channel is encrypted, as the radio firmware reads its key
+// (Channels::getKey()). A secondary channel without a key uses the
+// primary's; a short key is padded with zeros.
+std::string psk_summary(const meshtastic_ChannelSettings& s, bool secondary)
 {
-    if (s.psk.size == 0) return "no encryption";
-    if (s.psk.size == 1) return s.psk.bytes[0] == kDefaultPskIndex ? "default key" : "simple key " + std::to_string(s.psk.bytes[0]);
-    return s.psk.size == 16 ? "AES-128" : "AES-256";
+    if (s.psk.size == 0) return secondary ? "primary's key" : "no encryption";
+    if (s.psk.size == 1) {
+        if (s.psk.bytes[0] == 0) return "no encryption";
+        return s.psk.bytes[0] == kDefaultPskIndex ? "default key" : "simple key " + std::to_string(s.psk.bytes[0]);
+    }
+    return s.psk.size <= 16 ? "AES-128" : "AES-256";
 }
 
 std::string channel_url(const Mesh& mesh, int only_index)
@@ -1374,7 +1428,7 @@ void offer_channels(App* a, const std::string& url)
     std::string names;
     for (pb_size_t s = 0; s < set.settings_count; ++s) {
         const meshtastic_ChannelSettings& c = set.settings[s];
-        names += (s ? "\n" : "") + std::string(c.name[0] ? c.name : "(default name)") + "  -  " + psk_summary(c);
+        names += (s ? "\n" : "") + std::string(c.name[0] ? c.name : "(default name)") + "  -  " + psk_summary(c, s > 0);
     }
     const bool radio = set.has_lora_config && lora_differs(a->mesh.config.lora, lora_with(a->mesh.config.lora, set.lora_config));
     const auto add   = [a, url]() {
@@ -1491,9 +1545,10 @@ std::unique_ptr<Screen> page_channel(App& app, int index)
                                   "also picks the frequency slot. Empty, with the default key, it's the preset's "
                                   "public channel."
                                 : "Nodes need the same name and key to share a channel.";
-    f.push_back(f_info("Encryption", [cfg]() { return psk_summary(cfg->settings); }));
-    f.back().about = "How this channel is encrypted, going by its key: not at all, with the public default key, or "
-                     "with a private AES-128 or AES-256 key.";
+    f.push_back(f_info("Encryption", [cfg, index]() { return psk_summary(cfg->settings, index > 0); }));
+    f.back().about = std::string("How this channel is encrypted, going by its key: not at all, with the public "
+                                 "default key, or with a private AES-128 or AES-256 key.") +
+                     (index > 0 ? " Without a key of its own it uses the primary channel's." : "");
     f.push_back(f_text(
         "Key (base64)", [cfg]() { return base64_encode(cfg->settings.psk.bytes, cfg->settings.psk.size); },
         [cfg](const std::string& s) {
@@ -1534,7 +1589,7 @@ std::unique_ptr<Screen> page_channel(App& app, int index)
             cfg->settings.has_module_settings               = true;
             cfg->settings.module_settings.position_precision = static_cast<uint32_t>(v);
         },
-        precision_opts(), ""));
+        precision_opts(cfg->settings.module_settings.position_precision), ""));
     f.back().about = "How precisely your position is shared on this channel; Off shares none. Regular position "
                      "updates go on the first channel in the list that doesn't have it off.";
     // MeshZero itself still notifies; the flag is for the radio and other apps.
@@ -1594,7 +1649,7 @@ public:
             it.prefix = std::to_string(i);
             if (mesh.channel_enabled(i)) {
                 it.text  = ui::clean(mesh.channel_name(i), true) + (i == 0 ? "  (primary)" : "");
-                it.right = psk_summary(c.settings);
+                it.right = psk_summary(c.settings, i > 0);
             } else {
                 it.text      = "empty slot";
                 it.has_color = true;
