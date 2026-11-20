@@ -33,6 +33,9 @@ other mesh networking technologies.
   power, network, security, MQTT, telemetry and a few other modules.
 - The Meshtastic TCP API on port 4403, for MeshMonitor, the `meshtastic` CLI
   or the phone apps over Wi-Fi. Enable that in settings.
+- Supports the new and old model Cap Lora 1262 modules.
+- Community Configs allow meshtastic groups/regions around the world to submit their
+  preferred radio and channel configurations for easy setup.
 
 ## You need
 
@@ -69,35 +72,16 @@ then install:
 sudo dpkg -i ./meshzero_<version>_arm64.deb
 ```
 
-## Meshes with their own radio settings
+## Community Configurations
 
-Some local meshes do not use one of the official modem presets. A channel
-link or QR code from such a mesh carries its radio settings too. When you add
-one (Setup > Channels > Add from URL or Scan QR code) and the settings differ
-from yours, MeshZero asks whether to add only the channels or to switch to
-that setup, which replaces your channels and radio settings the way the phone
-apps do.
+Some local meshes do not use one of the official modem presets, and have
+agreed upon radio and channel configurations for their area. With community
+configurations, I want to enable communities around the world to submit
+their preferred settings so that you can set them on your Cardputer with just
+a click.
 
-Setup > Channels > Community setups lists a few such setups so they can be
-chosen without a link. This is experimental: it is new, and how it works may
-still change. They are not official Meshtastic presets, and a node using one
-only reaches nodes set up the same way. So far:
-
-- SFNarrow (Spain): EU_868, SF7, 62.5 kHz, CR 4/5, 869.618 MHz. From
-  [meshtastic.es](https://meshtastic.es/docs/generador-configuracion/).
-
-The same values can be entered by hand under Setup > LoRa radio: change the
-bandwidth, spreading factor or coding rate and the modem becomes Custom. A
-fixed frequency can be set there too.
-
-## Updates
-
-When it starts, and at most once an hour, MeshZero asks GitHub which release
-is the latest and tells you if yours is older. Nothing about you or your node
-is sent, only the request itself. It needs `curl` and a network, and does
-nothing without them. Turn it off under Setup > Updates, or set
-`MESHZERO_UPDATE_CHECK=0`. Installing the update is still up to you, from the
-store or the releases page.
+I will start by adding the most common configurations, but hope the community
+will reach out to add their settings as this app becomes more popular (hopefully).
 
 ## Keys
 
@@ -116,12 +100,8 @@ store or the releases page.
 
 The radio stays on after you close the app, so messages keep arriving and your
 node keeps relaying. While it runs it owns the LoRa cap and the GPS, so other
-apps can't use them. To free the cap, turn off Setup > Run in background. The
-radio then starts when you open MeshZero and stops about ten seconds after you
-close it.
-
-Without the cap attached the radio does not run at all. It starts once a cap
-is found or the app is opened.
+apps can't use them. If you'd rather only have your node "active" when the app
+is open, turn off Setup > Run in background.
 
 ## Using it from other software
 
@@ -157,19 +137,6 @@ python3 tools/fakeradio.py &
 MESHZERO_STATE_DIR=/tmp/mz build/host/meshzerod serve &
 MESHZERO_STATE_DIR=/tmp/mz build/host/meshzero --display sdl
 ```
-
-The camera can be stood in for as well. `MESHZERO_CAMERA_CMD` names a program
-that writes raw 1920x1080 YUV 4:2:0 frames, for example a still image through
-ffmpeg:
-
-```sh
-export MESHZERO_CAMERA_CMD="ffmpeg -loglevel quiet -re -loop 1 -i code.png \
-  -vf scale=300:300,pad=1920:1080:-1:-1:gray -pix_fmt yuv420p -r 10 -f rawvideo -"
-```
-
-`meshzero --script FILE` runs the interface with no display and saves
-screenshots. That is how the ones in `screenshots/` are made, see
-`tools/uitest.sh`.
 
 The arm64 package is cross-built in Docker:
 
