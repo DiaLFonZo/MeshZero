@@ -352,6 +352,95 @@ std::vector<Opt> precision_opts()
             {17, "Within 180 m"}, {18, "Within 90 m"},  {19, "Within 45 m"},  {32, "Exact"}};
 }
 
+// The longest interval the radio firmware keeps, in seconds. It stands for
+// never there (MAX_INTERVAL), though it counts it as about 24 days.
+constexpr int64_t kMaxInterval = 2147483647;
+
+bool router_role(int role)
+{
+    return role == meshtastic_Config_DeviceConfig_Role_ROUTER || role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
+}
+
+// An interval in a few words: "1 h", "30 min".
+std::string dur_text(int64_t secs)
+{
+    if (secs % 3600 == 0) return std::to_string(secs / 3600) + " h";
+    if (secs % 60 == 0) return std::to_string(secs / 60) + " min";
+    return std::to_string(secs) + " s";
+}
+
+// Options with the current value added when it isn't among them, so that it shows by name.
+std::vector<Opt> with_current(std::vector<Opt> opts, int64_t current, const std::string& label)
+{
+    for (const Opt& o : opts) {
+        if (o.value == current) return opts;
+    }
+    opts.push_back({current, label});
+    return opts;
+}
+
+// The default key, AQ== in base64.
+constexpr uint8_t kDefaultPskIndex = 1;
+
+// Channels::isDefaultChannel() in the radio firmware: the default key, and no
+// name ("Default" counts as none) or the name of the preset in use.
+bool default_channel(const meshtastic_Config_LoRaConfig& lora, const meshtastic_Channel& c)
+{
+    const meshtastic_ChannelSettings& s = c.settings;
+    if (!c.has_settings || s.psk.size != 1 || s.psk.bytes[0] != kDefaultPskIndex) return false;
+    const std::string preset = lora.use_preset ? modem_preset_name(lora.modem_preset) : "Custom";
+    return !s.name[0] || strcmp(s.name, "Default") == 0 || s.name == preset;
+}
+
+// Whether the radio firmware holds an interval to its minimum for a public
+// channel. It does so when it starts (NodeDB.cpp), replacing a shorter one,
+// for two kinds of interval, each with a check of its own:
+//  - Position: the broadcast and smart minimum intervals, when the first
+//    channel that shares position is a default channel (isDefaultChannel).
+//  - Telemetry: all telemetry intervals, when any channel is a default
+//    channel, on a preset without a fixed frequency (hasDefaultChannel). Its
+//    test for the default frequency slot always passes then, as the radio
+//    isn't set up yet.
+// `primary`, when given, stands in for channel 0 as it is being edited.
+enum class MinimumFor { Position, Telemetry };
+bool public_minimum(const Mesh& mesh, MinimumFor what, const meshtastic_Channel* primary = nullptr)
+{
+    const meshtastic_Config_LoRaConfig& lora = mesh.config.lora;
+    const auto channel = [&](int i) -> const meshtastic_Channel& {
+        return i == 0 && primary ? *primary : mesh.channels[i];
+    };
+    if (what == MinimumFor::Position) {
+        for (int i = 0; i < kMaxChannels; ++i) {
+            const meshtastic_ChannelSettings& s = channel(i).settings;
+            if (s.has_module_settings && s.module_settings.position_precision != 0) {
+                return default_channel(lora, channel(i));
+            }
+        }
+        return false;
+    }
+    if (!lora.use_preset || lora.override_frequency != 0) return false;
+    for (int i = 0; i < kMaxChannels; ++i) {
+        if (default_channel(lora, channel(i))) return true;
+    }
+    return false;
+}
+
+// Makes an interval field take 0, the firmware's default, and refuse what
+// the firmware would raise to `minimum` on a public channel.
+void public_interval(Field& f, std::function<bool()> applies, std::function<int64_t()> minimum,
+                     std::function<std::string()> default_text)
+{
+    f.zero_ok   = true;
+    f.bounds    = [applies, minimum](int64_t& lo, int64_t&) {
+        if (applies()) lo = minimum();
+    };
+    f.help_text = [applies, minimum, default_text]() {
+        std::string text = "0 = default (" + default_text() + ")";
+        if (applies()) text += ". At least " + dur_text(minimum()) + " on a public channel";
+        return text;
+    };
+}
+
 const char* const kRestartNote = "Saved. Radio restarting.";
 
 void send_config(Mesh& mesh, const meshtastic_Config& c)
@@ -660,39 +749,63 @@ std::unique_ptr<Screen> page_device(App& app)
 {
     auto cfg = std::make_shared<meshtastic_Config_DeviceConfig>(app.mesh.config.device);
     std::vector<Field> f;
-    f.push_back(MZ_ENUM("Role", role,
-                        (std::vector<Opt>{
-                            {meshtastic_Config_DeviceConfig_Role_CLIENT, "Client"},
-                            {meshtastic_Config_DeviceConfig_Role_CLIENT_MUTE, "Client mute"},
-                            {meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN, "Client hidden"},
-                            {meshtastic_Config_DeviceConfig_Role_CLIENT_BASE, "Client base"},
-                            {meshtastic_Config_DeviceConfig_Role_TRACKER, "Tracker"},
-                            {meshtastic_Config_DeviceConfig_Role_SENSOR, "Sensor"},
-                            {meshtastic_Config_DeviceConfig_Role_TAK, "TAK"},
-                            {meshtastic_Config_DeviceConfig_Role_TAK_TRACKER, "TAK tracker"},
-                            {meshtastic_Config_DeviceConfig_Role_LOST_AND_FOUND, "Lost and found"},
-                            {meshtastic_Config_DeviceConfig_Role_ROUTER, "Router"},
-                            {meshtastic_Config_DeviceConfig_Role_ROUTER_LATE, "Router late"},
-                            {meshtastic_Config_DeviceConfig_Role_REPEATER, "Repeater"},
-                        }),
-                        ""));
+    // The radio firmware saves Repeater, and Router client before it, as Client.
+    f.push_back(f_enum(
+        "Role", [cfg]() { return static_cast<int64_t>(cfg->role); },
+        [cfg](int64_t v) {
+            cfg->role = static_cast<meshtastic_Config_DeviceConfig_Role>(v);
+            // The radio saves None as All for these roles.
+            if (router_role(cfg->role) && cfg->rebroadcast_mode == meshtastic_Config_DeviceConfig_RebroadcastMode_NONE) {
+                cfg->rebroadcast_mode = meshtastic_Config_DeviceConfig_RebroadcastMode_ALL;
+            }
+        },
+        {}, ""));
+    f.back().opts_of = [cfg]() {
+        return with_current(
+            {
+                {meshtastic_Config_DeviceConfig_Role_CLIENT, "Client"},
+                {meshtastic_Config_DeviceConfig_Role_CLIENT_MUTE, "Client mute"},
+                {meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN, "Client hidden"},
+                {meshtastic_Config_DeviceConfig_Role_CLIENT_BASE, "Client base"},
+                {meshtastic_Config_DeviceConfig_Role_TRACKER, "Tracker"},
+                {meshtastic_Config_DeviceConfig_Role_SENSOR, "Sensor"},
+                {meshtastic_Config_DeviceConfig_Role_TAK, "TAK"},
+                {meshtastic_Config_DeviceConfig_Role_TAK_TRACKER, "TAK tracker"},
+                {meshtastic_Config_DeviceConfig_Role_LOST_AND_FOUND, "Lost and found"},
+                {meshtastic_Config_DeviceConfig_Role_ROUTER, "Router"},
+                {meshtastic_Config_DeviceConfig_Role_ROUTER_LATE, "Router late"},
+            },
+            cfg->role,
+            cfg->role == meshtastic_Config_DeviceConfig_Role_REPEATER        ? "Repeater  saved as Client"
+            : cfg->role == meshtastic_Config_DeviceConfig_Role_ROUTER_CLIENT ? "Router client  saved as Client"
+                                                                             : role_name(cfg->role));
+    };
     f.back().about = "How this node takes part in the mesh. Client suits most people; Client mute doesn't relay for "
-                     "others. Router roles are for well-placed fixed nodes. Repeater is saved as Client.";
-    f.push_back(MZ_ENUM("Rebroadcast", rebroadcast_mode,
-                        (std::vector<Opt>{
-                            {meshtastic_Config_DeviceConfig_RebroadcastMode_ALL, "All"},
-                            {meshtastic_Config_DeviceConfig_RebroadcastMode_ALL_SKIP_DECODING, "All, skip decoding"},
-                            {meshtastic_Config_DeviceConfig_RebroadcastMode_LOCAL_ONLY, "Local only"},
-                            {meshtastic_Config_DeviceConfig_RebroadcastMode_KNOWN_ONLY, "Known only"},
-                            {meshtastic_Config_DeviceConfig_RebroadcastMode_CORE_PORTNUMS_ONLY, "Core portnums only"},
-                            {meshtastic_Config_DeviceConfig_RebroadcastMode_NONE, "None"},
-                        }),
-                        ""));
+                     "others. Router roles are for well-placed fixed nodes. A new role also resets some intervals "
+                     "to suit it, and Router and Client hidden set Rebroadcast too.";
+    f.push_back(f_enum(
+        "Rebroadcast", [cfg]() { return static_cast<int64_t>(cfg->rebroadcast_mode); },
+        [cfg](int64_t v) { cfg->rebroadcast_mode = static_cast<meshtastic_Config_DeviceConfig_RebroadcastMode>(v); },
+        {}, ""));
+    // All, skip decoding was for the Repeater role; it works as All now.
+    f.back().opts_of = [cfg]() {
+        std::vector<Opt> opts = {
+            {meshtastic_Config_DeviceConfig_RebroadcastMode_ALL, "All"},
+            {meshtastic_Config_DeviceConfig_RebroadcastMode_LOCAL_ONLY, "Local only"},
+            {meshtastic_Config_DeviceConfig_RebroadcastMode_KNOWN_ONLY, "Known only"},
+            {meshtastic_Config_DeviceConfig_RebroadcastMode_CORE_PORTNUMS_ONLY, "Core portnums only"},
+        };
+        if (!router_role(cfg->role)) opts.push_back({meshtastic_Config_DeviceConfig_RebroadcastMode_NONE, "None"});
+        const auto mode = cfg->rebroadcast_mode;
+        return with_current(opts, mode,
+                            mode == meshtastic_Config_DeviceConfig_RebroadcastMode_ALL_SKIP_DECODING ? "All, skip decoding  works as All"
+                            : mode == meshtastic_Config_DeviceConfig_RebroadcastMode_NONE ? "None  saved as All for routers"
+                                                                                           : std::to_string(mode));
+    };
     f.back().about = "Which packets this node relays for others. All: everything it hears. Local only: only on its "
                      "own channels. Known only: also only from nodes it knows. None: nothing; routers can't use it.";
-    // The radio firmware saves anything under an hour, 0 included, as an hour.
-    f.push_back(MZ_INT("Node info interval", node_info_broadcast_secs, 0, 86400, "s",
-                       "Default 3 h. Under 1 h, even 0, is saved as 1 h"));
+    f.push_back(MZ_INT("Node info interval", node_info_broadcast_secs, 3600, kMaxInterval, "s",
+                       "Default 3 h, 1 h at least"));
     f.back().about = "How often this node announces its name and key to the mesh, so others can list it and "
                      "message it.";
     f.push_back(MZ_TEXT("Time zone (POSIX)", tzdef, "POSIX TZ string", false));
@@ -736,24 +849,33 @@ std::unique_ptr<Screen> page_position(App& app)
         precision_opts(), "Primary channel. Others: Setup > Channels"));
     f.back().about = "How precisely your position is shared on the primary channel; Off shares none there. Other "
                      "channels have their own setting in Setup > Channels.";
-    f.push_back(MZ_INT("Broadcast interval", position_broadcast_secs, 0, 86400, "s",
-                       "0 = default (1 h)"));
+    const Mesh* m        = &app.mesh;
+    const auto on_public = [m, primary]() { return public_minimum(*m, MinimumFor::Position, primary.get()); };
+    f.push_back(MZ_INT("Broadcast interval", position_broadcast_secs, 1, kMaxInterval, "s", ""));
+    public_interval(
+        f.back(), on_public, [m]() -> int64_t { return router_role(m->config.device.role) ? 43200 : 3600; },
+        [m]() { return std::string(router_role(m->config.device.role) ? "12 h" : "1 h"); });
     f.back().about = "How often your position is sent to the mesh. On a public channel the firmware won't send it "
-                     "more often than once an hour.";
+                     "more often than once an hour, or 12 hours for a router.";
     f.push_back(MZ_BOOL("Smart broadcast", position_broadcast_smart_enabled,
                         "Send sooner when moving"));
     f.back().about = "Also sends your position sooner when you move, as set by the two smart settings below.";
-    f.push_back(MZ_INT("Smart min distance", broadcast_smart_minimum_distance, 0, 100000, "m",
+    f.push_back(MZ_INT("Smart min distance", broadcast_smart_minimum_distance, 0, kMaxInterval, "m",
                        "0 = default (100 m)"));
     f.back().about = "How far you must move before smart broadcast sends your position again.";
-    f.push_back(MZ_INT("Smart min interval", broadcast_smart_minimum_interval_secs, 0, 86400, "s",
-                       "0 = default (5 min)"));
+    f.push_back(MZ_INT("Smart min interval", broadcast_smart_minimum_interval_secs, 1, kMaxInterval, "s", ""));
+    public_interval(
+        f.back(), on_public, []() -> int64_t { return 300; }, []() { return std::string("5 min"); });
     f.back().about = "The least time between two smart broadcasts. On a public channel the firmware won't go below "
                      "5 minutes.";
     // The radio firmware takes its first fix one interval after it starts,
     // which, with running in the background off, is when MeshZero opens.
-    f.push_back(MZ_INT("GPS update interval", gps_update_interval, 0, 86400, "s",
-                       "0 = default (2 min). First fix after opening waits this long"));
+    f.push_back(MZ_INT("GPS update interval", gps_update_interval, 0, kMaxInterval, "s", ""));
+    f.back().value_text = [](int64_t v) { return std::string(v >= kMaxInterval ? "at boot only" : ""); };
+    f.back().help_text  = [m]() {
+        return std::string("0 = default (") + (router_role(m->config.device.role) ? "24 h" : "2 min") +
+               "). First fix after opening waits this long";
+    };
     f.back().about = "How often the GPS takes a new fix. Shorter keeps your position fresher but uses more power.";
     f.push_back(f_header("Fixed position"));
     f.push_back(MZ_BOOL("Use fixed position", fixed_position, ""));
@@ -814,14 +936,16 @@ std::unique_ptr<Screen> page_power(App& app)
     f.push_back(MZ_BOOL("Power saving", is_power_saving, ""));
     f.back().about = "Lets the radio sleep as much as it can to save power. The firmware advises against it on a node "
                      "used with an app, like this one.";
-    f.push_back(MZ_INT("Shutdown on battery after", on_battery_shutdown_after_secs, 0, 604800, "s", "0 = never"));
-    f.back().about = "Turns the radio off once it has run this long without external power.";
     return make_editor(
         app, "Power", std::move(f),
         [&app, cfg]() {
             meshtastic_Config c     = meshtastic_Config_init_zero;
             c.which_payload_variant = meshtastic_Config_power_tag;
             c.payload_variant.power = *cfg;
+            // The radio can't tell on this hardware whether it has external
+            // power, so it would take itself for on battery and stop, after
+            // any time set here, again each time it is restarted.
+            c.payload_variant.power.on_battery_shutdown_after_secs = 0;
             send_config(app.mesh, c);
         },
         kRestartNote);
@@ -1077,8 +1201,6 @@ std::unique_ptr<Screen> page_range_test(App& app)
 }
 
 // --------------------------------------------------------------- channels
-
-constexpr uint8_t kDefaultPskIndex = 1;
 
 std::string psk_summary(const meshtastic_ChannelSettings& s)
 {
@@ -1709,7 +1831,7 @@ public:
               "The GPS, how precisely and how often your position is shared, and a fixed position for a node without "
               "GPS.",
               open(page_position));
-        entry("Power", "", "Power saving, and turning the radio off after a while on battery.", open(page_power));
+        entry("Power", "", "Power saving for the radio.", open(page_power));
         entry("Network", "",
               "Mesh over the local network, and the radio's time and log servers. Wi-Fi is set up in the system.",
               open(page_network));

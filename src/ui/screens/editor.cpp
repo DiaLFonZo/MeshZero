@@ -307,12 +307,15 @@ private:
         return (f.zero_ok && v == 0) || (v >= lo && v <= hi);
     }
 
-    // Whether 0 is a value of its own, outside the range.
-    static bool zero_apart(const Field& f)
+    // The bounds to tell the user, with 0 joined to a range next to it, and
+    // whether 0 is a value of its own outside them.
+    static bool told_range(const Field& f, int64_t& lo, int64_t& hi)
     {
-        int64_t lo = 0, hi = 0;
         range(f, lo, hi);
-        return f.zero_ok && (lo > 0 || hi < 0);
+        if (!f.zero_ok) return false;
+        if (lo == 1) lo = 0;
+        if (hi == -1) hi = 0;
+        return lo > 0 || hi < 0;
     }
 
     // Two bounds, written so that a minus sign isn't taken for the dash between them.
@@ -326,18 +329,18 @@ private:
     static std::string accepted(const Field& f)
     {
         int64_t lo = 0, hi = 0;
-        range(f, lo, hi);
-        return (zero_apart(f) ? "0, or " : "") + span(lo, hi, "-");
+        const bool zero_apart = told_range(f, lo, hi);
+        return (zero_apart ? "0, or " : "") + span(lo, hi, "-");
     }
 
     // The same, for a message: "0, or a number from 3600 to 86400".
     static std::string accepted_sentence(const Field& f)
     {
         int64_t lo = 0, hi = 0;
-        range(f, lo, hi);
+        const bool zero_apart     = told_range(f, lo, hi);
         const std::string numbers = lo == hi ? std::to_string(lo)
                                              : "a number from " + std::to_string(lo) + " to " + std::to_string(hi);
-        return (zero_apart(f) ? "0, or " : "") + numbers;
+        return (zero_apart ? "0, or " : "") + numbers;
     }
 
     // The radio firmware keeps "never" in its intervals, all in seconds, as the
