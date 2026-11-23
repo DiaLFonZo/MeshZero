@@ -23,8 +23,11 @@ other mesh networking technologies.
   particular, pick emoji from a grid while writing.
 - Message details (signal, hops, encryption, delivery) and sending a failed
   message again.
+- Sounds for new messages, alert bells, and muting per chat.
 - Optional background mode that keeps the radio running after you close the app.
-- Node listing with details, actions, and all supported functions.
+- Node listing with details, actions, and all supported functions. Search by
+  name or ID, and filter by online, direct, favorites and more.
+- Sensor readings (environment, power, air quality) on a node's page.
 - A map of the nodes around you: a simple radar, or pins on a street or
   topographic map. Map tiles are downloaded as you look at them and kept, so
   places you have seen before work without a network.
@@ -40,6 +43,7 @@ other mesh networking technologies.
   power, network, security, MQTT, telemetry and a few other modules.
 - The Meshtastic TCP API on port 4403, for MeshMonitor, the `meshtastic` CLI
   or the phone apps over Wi-Fi. Enable that in settings.
+- Bluetooth for the phone apps (early access), for when there is no Wi-Fi.
 - Supports the new and old model Cap Lora 1262 modules.
 - Community Configs allow meshtastic groups/regions around the world to submit their
   preferred radio and channel configurations for easy setup.
@@ -71,7 +75,7 @@ sudo apt install ./meshzero_<version>_arm64.deb
 Install the dependencies first:
 
 ```sh
-sudo apt install adduser libgpiod3 libi2c0 libinput10 liborcania2.3 libsdl2-2.0-0 libssl3t64 libulfius2.7t64 libusb-1.0-0 libuv1t64 libx11-6 libxkbcommon0 libyaml-cpp0.8
+sudo apt install adduser libgpiod3 libi2c0 libinput10 liborcania2.3 libsdl2-2.0-0 libssl3t64 libsystemd0 libulfius2.7t64 libusb-1.0-0 libuv1t64 libx11-6 libxkbcommon0 libyaml-cpp0.8
 ```
 
 then install:
@@ -98,6 +102,9 @@ will reach out to add their settings as this app becomes more popular (hopefully
 | Enter | Open, edit, send |
 | Up, in a chat | Pick a message. Up and Down move between messages, Enter offers what to do with it: react, reply, details, send again |
 | Tab, in a chat | Emoji to put into the message being written |
+| Ctrl+G, in a chat | Send the message with an alert bell |
+| M, on a chat in Chats | Mute or unmute it |
+| S, V and /, in Nodes | Sort, filter, and search by name or ID |
 | Esc | Back. On a changed settings page it asks whether to save. On the main pages, hold it for 2 seconds to leave the app |
 | Tab, Left, Right | Switch between Chats, Nodes, Map, Radio and Setup |
 | + and - | Zoom the map, 0 to fit everything |
@@ -128,11 +135,22 @@ The API has no authentication, same as any Meshtastic node with networking
 turned on, so while network access is on anyone on your network can use the
 radio.
 
+## Bluetooth (early access)
+
+Turn on Setup > Bluetooth and pick the device in the Meshtastic phone app. It
+shows up as your short name and four digits, like `MZ01_1a2b`. The first time,
+a six-digit code appears on the Cardputer to type on the phone, so keep
+MeshZero open for that. After pairing, the phone connects by itself.
+
+Pairing can be set to "No PIN". Then any phone nearby can connect and change
+the radio's settings, so use it with care.
+
 ## Building
 
 On a desktop, for development:
 
 ```sh
+sudo apt install libsystemd-dev        # for Bluetooth; without it the service is built without
 cmake -S . -B build/host -G Ninja      # add -DMESHZERO_SDL=ON for a window (needs libsdl2-dev)
 cmake --build build/host
 ctest --test-dir build/host            # the proxy test also wants: pip install meshtastic
