@@ -1948,12 +1948,12 @@ public:
         header("Appearance");
         entry("Accent color", ui::accents()[ui::accent_index()].name, "",
               [a]() { a->push(std::make_unique<AccentScreen>(*a)); });
-        entry("Units", ui::imperial() ? "Imperial" : "Metric",
-              "Whether distances are shown in kilometres or in miles. The topographic map follows: with Metric its "
-              "heights are in metres; with Imperial they are in feet inside the United States, where there is such "
-              "a map, and in metres elsewhere.",
+        entry("Map units", ui::imperial() ? "Imperial" : "Metric",
+              "What the Map page measures in. Metric: distances in kilometres, and a topographic map with heights in "
+              "metres. Imperial: distances in miles, and a topographic map with heights in feet inside the United "
+              "States, where there is such a map; elsewhere its heights stay in metres.",
               [a]() {
-                  a->push(make_picker(*a, "Units", {"Metric (m, km)", "Imperial (ft, mi)"}, ui::imperial() ? 1 : 0,
+                  a->push(make_picker(*a, "Map units", {"Metric", "Imperial"}, ui::imperial() ? 1 : 0,
                                       [](int i) { ui::set_imperial(i == 1); }));
               });
         header("Maintenance");

@@ -252,24 +252,10 @@ double metres_per_px(double lat, int zoom)
     return 156543.03392804097 * std::cos(lat * M_PI / 180.0) / static_cast<double>(1u << zoom);
 }
 
-namespace {
-bool g_imperial = false;
-}
-
-void set_imperial_distances(bool on)
-{
-    g_imperial = on;
-}
-
-bool imperial_distances()
-{
-    return g_imperial;
-}
-
-std::string distance_str(double metres)
+std::string distance_str(double metres, bool imperial)
 {
     char buf[24];
-    if (g_imperial) {
+    if (imperial) {
         const double miles = metres / kMileM;
         if (metres < 0.25 * kMileM - 0.5) {
             snprintf(buf, sizeof(buf), "%.0fft", metres / kFootM);

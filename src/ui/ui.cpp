@@ -46,7 +46,6 @@ void load_appearance()
             if (value == accents()[i].name) g_accent = i;
         }
     }
-    set_imperial_distances(g_imperial);
 }
 
 void save_appearance()
@@ -83,7 +82,6 @@ void set_imperial(bool on)
 {
     load_appearance();
     g_imperial = on;
-    set_imperial_distances(on);
     save_appearance();
 }
 

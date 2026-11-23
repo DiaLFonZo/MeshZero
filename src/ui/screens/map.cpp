@@ -81,7 +81,7 @@ public:
     std::string hint() const override
     {
         if (layer_ < 0) {
-            return "+/- zoom   0 auto   m map   ring " + distance_str(scale_m_);
+            return "+/- zoom   0 auto   m map   ring " + distance_str(scale_m_, ui::imperial());
         }
         if (moving_) return "arrows move   +/- zoom   0 fit   enter done";
         std::string state;
@@ -142,7 +142,7 @@ private:
     // ---- tile map ------------------------------------------------------------
 
     // Where the tiles come from. The topographic map is the one in feet when
-    // distances are shown in feet and miles.
+    // the map's units are imperial.
     int source() const { return layer_ == tiles::kTopo && ui::imperial() ? tiles::kUsTopo : layer_; }
 
     static std::string count_str(int nodes) { return std::to_string(nodes) + (nodes == 1 ? " node" : " nodes"); }
@@ -304,7 +304,7 @@ private:
         ui::set_bg(bar, c_ink());
         lv_obj_set_style_border_width(bar, 1, 0);
         lv_obj_set_style_border_color(bar, lv_color_white(), 0);
-        lv_obj_t* length = plate(pins_, distance_str(bar_m), ui::c_text());
+        lv_obj_t* length = plate(pins_, distance_str(bar_m, ui::imperial()), ui::c_text());
         lv_obj_set_pos(length, 4, kContentH - 21);
         // The maps are free to use on the condition that their makers are named.
         const char* by = used_other_ && used_source_ ? "(c) OpenStreetMap, SRTM, OpenTopoMap, USGS"
@@ -490,7 +490,7 @@ private:
         lv_obj_set_style_border_width(me, 1, 0);
         lv_obj_set_style_border_color(me, ui::c_text(), 0);
 
-        lv_obj_t* scale = ui::label(plot_, distance_str(scale_m_) + "\n" + distance_str(scale_m_ / 2) + " inner", ui::c_dim(),
+        lv_obj_t* scale = ui::label(plot_, distance_str(scale_m_, ui::imperial()) + "\n" + distance_str(scale_m_ / 2, ui::imperial()) + " inner", ui::c_dim(),
                                     ui::font_small());
         lv_obj_set_pos(scale, 5, 3);
         lv_obj_t* count = ui::label(plot_, count_str(plotted_), ui::c_dim(), ui::font_small());

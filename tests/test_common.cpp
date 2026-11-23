@@ -106,14 +106,12 @@ static void test_util()
     CHECK(std::string(compass_point(b)) == "E");
     CHECK(distance_str(850) == "850m");
     CHECK(distance_str(12345) == "12.3km");
-    set_imperial_distances(true);
-    CHECK(distance_str(500 * kFootM) == "500ft");
-    CHECK(distance_str(0.25 * kMileM) == "0.25mi");
-    CHECK(distance_str(2.5 * kMileM) == "2.5mi");
-    CHECK(distance_str(5 * kMileM) == "5mi");
-    CHECK(distance_str(12345) == "7.67mi");
-    CHECK(distance_str(250 * kMileM) == "250mi");
-    set_imperial_distances(false);
+    CHECK(distance_str(500 * kFootM, true) == "500ft");
+    CHECK(distance_str(0.25 * kMileM, true) == "0.25mi");
+    CHECK(distance_str(2.5 * kMileM, true) == "2.5mi");
+    CHECK(distance_str(5 * kMileM, true) == "5mi");
+    CHECK(distance_str(12345, true) == "7.67mi");
+    CHECK(distance_str(250 * kMileM, true) == "250mi");
 
     // Map tiles: the world is one tile at zoom 0, with 0,0 in its middle.
     double x = 0, y = 0;
