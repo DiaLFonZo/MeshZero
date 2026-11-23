@@ -369,4 +369,8 @@ if __name__ == "__main__":
                         help="a node missing from the node list posts on the channel and sends a direct message")
     parser.add_argument("--chatter-delay", type=float, default=2.0)
     parser.add_argument("--chatter-gap", type=float, default=0.7)
-    Radio(parser.parse_args()).serve()
+    parser.add_argument("--home", metavar="LAT,LON", help="where the mesh is, instead of Amsterdam")
+    options = parser.parse_args()
+    if options.home:
+        HOME = tuple(float(v) for v in options.home.split(","))
+    Radio(options).serve()

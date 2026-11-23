@@ -33,6 +33,11 @@ const std::vector<Accent>& accents();
 size_t accent_index();
 void set_accent(size_t index);
 
+// Whether distances are shown in feet and miles instead of metres and
+// kilometres; saved for the next start. The topographic map follows it too.
+bool imperial();
+void set_imperial(bool on);
+
 const lv_font_t* font();
 const lv_font_t* font_small();
 

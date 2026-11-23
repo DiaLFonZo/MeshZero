@@ -19,6 +19,10 @@ constexpr int kRadius = kContentH / 2 - 6;
 // Ring distances the map snaps to, in metres.
 const double kScales[] = {100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000};
 constexpr int kScaleCount = static_cast<int>(sizeof(kScales) / sizeof(kScales[0]));
+// The same number of them in feet and miles.
+const double kScalesImperial[kScaleCount] = {250 * kFootM, 500 * kFootM, 1000 * kFootM, 0.5 * kMileM, 1 * kMileM,
+                                             2.5 * kMileM, 5 * kMileM,   10 * kMileM,   25 * kMileM,  50 * kMileM,
+                                             100 * kMileM, 250 * kMileM, 500 * kMileM};
 
 // ---- tile map ----------------------------------------------------------------
 constexpr int kFitZoomMax   = 16;  // as close as fitting the nodes goes by itself
@@ -31,6 +35,11 @@ constexpr uint16_t kNoTileLine = 0x2969;
 // Lengths the scale bar snaps to, in metres.
 const double kBars[] = {10,    20,    50,    100,    200,    500,    1000,    2000,
                         5000,  10000, 20000, 50000,  100000, 200000, 500000,  1000000};
+
+// The same in feet and miles: up to 1000 ft, then from a quarter mile.
+const double kBarsImperial[] = {50 * kFootM,   100 * kFootM, 200 * kFootM, 500 * kFootM, 1000 * kFootM, 0.25 * kMileM,
+                                0.5 * kMileM,  1 * kMileM,   2 * kMileM,   5 * kMileM,   10 * kMileM,   20 * kMileM,
+                                50 * kMileM,   100 * kMileM, 200 * kMileM, 500 * kMileM};
 
 lv_color_t c_ink()
 {
@@ -72,23 +81,26 @@ public:
     std::string hint() const override
     {
         if (layer_ < 0) {
-            return "+/- zoom  0 auto  m map   ring " + distance_str(scale_m_) + "   " + std::to_string(plotted_) +
-                   " nodes";
+            return "+/- zoom   0 auto   m map   ring " + distance_str(scale_m_);
         }
         if (moving_) return "arrows move   +/- zoom   0 fit   enter done";
         std::string state;
         if (missing_ > 0) {
-            state = tiles::pending() > 0 && !tiles::failing() ? "  loading"
-                    : !tiles::downloads()                     ? "  no tiles"
-                                                              : "  offline";
+            state = !tiles::downloads()    ? "  no tiles"
+                    : tiles::failing()     ? "  offline"
+                    : tiles::pending() > 0 ? "  loading"
+                                           : "  no map here";
         }
-        return std::string("+/- zoom  0 fit  m ") + tiles::layer(layer_).name + "  enter move   " +
-               std::to_string(plotted_) + " nodes" + state;
+        return std::string("+/- zoom   0 fit   m ") + tiles::layer(layer_).name + "   enter move" + state;
     }
 
     void refresh() override
     {
         const bool map = layer_ >= 0;
+        if (ui::imperial() != seen_imperial_) {
+            seen_imperial_ = ui::imperial();
+            dirty_         = true;
+        }
         if (map != showing_map_ || !built_) {
             showing_map_ = map;
             dirty_       = true;
@@ -116,10 +128,10 @@ public:
     bool on_key(const Key& key) override
     {
         if (key.is_char('m') || key.is_char('M')) {
-            layer_  = layer_ + 1 >= tiles::kLayerCount ? -1 : layer_ + 1;
+            layer_  = layer_ + 1 > tiles::kTopo ? -1 : layer_ + 1;
             moving_ = false;
             dirty_  = true;
-            if (layer_ >= 0) zoom_level_ = std::min(zoom_level_, tiles::layer(layer_).max_zoom);
+            if (layer_ >= 0) zoom_level_ = std::min(zoom_level_, tiles::layer(source()).max_zoom);
             tiles::save_layer(layer_);
             return true;
         }
@@ -129,9 +141,15 @@ public:
 private:
     // ---- tile map ------------------------------------------------------------
 
+    // Where the tiles come from. The topographic map is the one in feet when
+    // distances are shown in feet and miles.
+    int source() const { return layer_ == tiles::kTopo && ui::imperial() ? tiles::kUsTopo : layer_; }
+
+    static std::string count_str(int nodes) { return std::to_string(nodes) + (nodes == 1 ? " node" : " nodes"); }
+
     bool map_key(const Key& key)
     {
-        const int max_zoom = tiles::layer(layer_).max_zoom;
+        const int max_zoom = tiles::layer(source()).max_zoom;
         const bool in      = key.is_char('+') || key.is_char('=');
         const bool out     = key.is_char('-') || key.is_char('_');
         if (in || out || (!moving_ && (key.k == K::Up || key.k == K::Down))) {
@@ -226,7 +244,7 @@ private:
             }
             placed_ = true;
         }
-        const int max_zoom = tiles::layer(layer_).max_zoom;
+        const int max_zoom = tiles::layer(source()).max_zoom;
         if (fit_) {
             // The closest zoom that still has every node on screen.
             int z = pins.empty() ? kAloneZoom : std::min(kFitZoomMax, max_zoom);
@@ -274,8 +292,9 @@ private:
 
         // Scale bar: the longest round distance that fits in about a quarter of the width.
         const double per_px = metres_per_px(lat_, zoom_level_);
-        double bar_m        = kBars[0];
-        for (const double m : kBars) {
+        const bool feet     = ui::imperial();
+        double bar_m        = feet ? kBarsImperial[0] : kBars[0];
+        for (const double m : feet ? kBarsImperial : kBars) {
             if (m / per_px <= kContentW / 4) bar_m = m;
         }
         const int bar_w = std::max(2, static_cast<int>(std::lround(bar_m / per_px)));
@@ -288,8 +307,13 @@ private:
         lv_obj_t* length = plate(pins_, distance_str(bar_m), ui::c_text());
         lv_obj_set_pos(length, 4, kContentH - 21);
         // The maps are free to use on the condition that their makers are named.
-        lv_obj_t* credit = plate(pins_, tiles::layer(layer_).credit, ui::c_dim());
+        const char* by = used_other_ && used_source_ ? "(c) OpenStreetMap, SRTM, OpenTopoMap, USGS"
+                         : used_other_               ? tiles::layer(tiles::kTopo).credit
+                                                     : tiles::layer(source()).credit;
+        lv_obj_t* credit = plate(pins_, by, ui::c_dim());
         lv_obj_align(credit, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+        lv_obj_t* count = plate(pins_, count_str(plotted_), ui::c_text());
+        lv_obj_align(count, LV_ALIGN_TOP_RIGHT, -2, 2);
         lv_obj_invalidate(canvas_);
     }
 
@@ -325,11 +349,16 @@ private:
     // Fills the picture with the tiles under it; ox, oy is its top left corner
     // in world pixels. A tile that is not there is stood in for by the part of
     // a tile from further out that covers it, enlarged, when there is one.
+    // The map in feet ends at the borders of the United States: where it has
+    // nothing, the one that covers the world is shown instead.
     void draw_tiles(int64_t ox, int64_t oy)
     {
         const int64_t count = int64_t{1} << zoom_level_;
         const auto floor_div = [](int64_t a, int64_t b) { return a >= 0 ? a / b : -((-a + b - 1) / b); };
-        missing_ = 0;
+        const int from  = source();
+        const int other = from == tiles::kUsTopo ? tiles::kTopo : -1;
+        missing_        = 0;
+        used_source_ = used_other_ = false;
         for (int64_t ty = floor_div(oy, kTilePx); ty * kTilePx < oy + kContentH; ++ty) {
             for (int64_t tx = floor_div(ox, kTilePx); tx * kTilePx < ox + kContentW; ++tx) {
                 const int x0 = static_cast<int>(std::max<int64_t>(tx * kTilePx, ox) - ox);
@@ -342,15 +371,27 @@ private:
                 const uint16_t* src = nullptr;
                 int shift = 0, bx = 0, by = 0;
                 if (ty >= 0 && ty < count) {
-                    src = tiles::get(layer_, zoom_level_, wx, static_cast<int>(ty), true);
+                    const int y = static_cast<int>(ty);
+                    bool second = false;
+                    src = tiles::get(from, zoom_level_, wx, y, true);
+                    if (!src && other >= 0) {
+                        // Asked for only once it is known that the first map has nothing here.
+                        src    = tiles::get(other, zoom_level_, wx, y, tiles::absent(from, zoom_level_, wx, y));
+                        second = src != nullptr;
+                    }
                     if (!src) ++missing_;
                     for (int d = 1; !src && d <= kStandIn && d <= zoom_level_; ++d) {
-                        src = tiles::get(layer_, zoom_level_ - d, wx >> d, static_cast<int>(ty) >> d, false);
+                        src = tiles::get(from, zoom_level_ - d, wx >> d, y >> d, false);
+                        if (!src && other >= 0) {
+                            src    = tiles::get(other, zoom_level_ - d, wx >> d, y >> d, false);
+                            second = src != nullptr;
+                        }
                         if (!src) continue;
                         shift = d;
                         bx    = (wx & ((1 << d) - 1)) * (kTilePx >> d);
-                        by    = (static_cast<int>(ty) & ((1 << d) - 1)) * (kTilePx >> d);
+                        by    = (y & ((1 << d) - 1)) * (kTilePx >> d);
                     }
+                    if (src) (second ? used_other_ : used_source_) = true;
                 }
                 for (int y = y0; y < y1; ++y) {
                     uint16_t* dst = &pixels_[static_cast<size_t>(y) * kContentW + x0];
@@ -404,10 +445,11 @@ private:
             farthest = std::max(farthest, d);
         }
         int auto_scale = 0;
-        while (auto_scale < kScaleCount - 1 && kScales[auto_scale] < farthest) ++auto_scale;
+        const double* scales = ui::imperial() ? kScalesImperial : kScales;
+        while (auto_scale < kScaleCount - 1 && scales[auto_scale] < farthest) ++auto_scale;
         const int index = zoom_ < 0 ? auto_scale : std::min(zoom_, kScaleCount - 1);
         scale_index_    = index;
-        scale_m_        = kScales[index];
+        scale_m_        = scales[index];
 
         for (const int r : {kRadius, kRadius / 2}) {
             lv_obj_t* ring = ui::box(plot_);
@@ -451,6 +493,8 @@ private:
         lv_obj_t* scale = ui::label(plot_, distance_str(scale_m_) + "\n" + distance_str(scale_m_ / 2) + " inner", ui::c_dim(),
                                     ui::font_small());
         lv_obj_set_pos(scale, 5, 3);
+        lv_obj_t* count = ui::label(plot_, count_str(plotted_), ui::c_dim(), ui::font_small());
+        lv_obj_align(count, LV_ALIGN_TOP_RIGHT, -5, 3);
         if (dots.empty()) {
             lv_obj_t* none = ui::label(plot_, "No other positions yet", ui::c_dim(), ui::font_small());
             lv_obj_align(none, LV_ALIGN_BOTTOM_LEFT, 5, -3);
@@ -479,7 +523,10 @@ private:
     lv_obj_t* pins_      = nullptr;  // what is drawn on the map
     lv_obj_t* note_      = nullptr;
     std::vector<uint16_t> pixels_;
-    int layer_           = -1;     // -1: radar, else a tiles::layer
+    int layer_           = -1;     // -1: radar, else tiles::kStreet or tiles::kTopo
+    bool seen_imperial_  = false;
+    bool used_source_    = false;  // tiles of the layer's own map are on screen
+    bool used_other_     = false;  // and tiles of the one that fills in for it
     bool showing_map_    = false;
     bool dirty_          = true;
     bool follow_         = true;   // the middle stays on this device

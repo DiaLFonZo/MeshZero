@@ -252,9 +252,41 @@ double metres_per_px(double lat, int zoom)
     return 156543.03392804097 * std::cos(lat * M_PI / 180.0) / static_cast<double>(1u << zoom);
 }
 
+namespace {
+bool g_imperial = false;
+}
+
+void set_imperial_distances(bool on)
+{
+    g_imperial = on;
+}
+
+bool imperial_distances()
+{
+    return g_imperial;
+}
+
 std::string distance_str(double metres)
 {
     char buf[24];
+    if (g_imperial) {
+        const double miles = metres / kMileM;
+        if (metres < 0.25 * kMileM - 0.5) {
+            snprintf(buf, sizeof(buf), "%.0fft", metres / kFootM);
+        } else if (miles < 10) {
+            // Up to two decimals, without zeros at the end: "0.25mi", "2.5mi", "5mi".
+            snprintf(buf, sizeof(buf), "%.2f", miles);
+            std::string text = buf;
+            while (text.back() == '0') text.pop_back();
+            if (text.back() == '.') text.pop_back();
+            return text + "mi";
+        } else if (miles < 100) {
+            snprintf(buf, sizeof(buf), "%.1fmi", miles);
+        } else {
+            snprintf(buf, sizeof(buf), "%.0fmi", miles);
+        }
+        return buf;
+    }
     if (metres < 1000) {
         snprintf(buf, sizeof(buf), "%.0fm", metres);
     } else if (metres < 100000) {

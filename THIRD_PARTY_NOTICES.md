@@ -87,6 +87,9 @@ kept on the device.
   (https://operations.osmfoundation.org/policies/tiles/).
 - Topo: map data © OpenStreetMap contributors and SRTM; map style
   © OpenTopoMap (CC-BY-SA, https://opentopomap.org/about).
+- Topo with imperial units, inside the United States: USGS The National Map
+  (https://www.usgs.gov/programs/national-geospatial-program/national-map),
+  in the public domain.
 
 ## Trademark
 

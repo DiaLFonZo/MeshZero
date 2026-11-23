@@ -1948,6 +1948,14 @@ public:
         header("Appearance");
         entry("Accent color", ui::accents()[ui::accent_index()].name, "",
               [a]() { a->push(std::make_unique<AccentScreen>(*a)); });
+        entry("Units", ui::imperial() ? "Imperial" : "Metric",
+              "Whether distances are shown in kilometres or in miles. The topographic map follows: with Metric its "
+              "heights are in metres; with Imperial they are in feet inside the United States, where there is such "
+              "a map, and in metres elsewhere.",
+              [a]() {
+                  a->push(make_picker(*a, "Units", {"Metric (m, km)", "Imperial (ft, mi)"}, ui::imperial() ? 1 : 0,
+                                      [](int i) { ui::set_imperial(i == 1); }));
+              });
         header("Maintenance");
         // Plain actions like this one need no explanation; ? does nothing on them.
         entry("Restart radio", "", "",
@@ -2017,8 +2025,8 @@ public:
               });
         entry("Map downloads", tiles::downloads() ? "on" : "off",
               "The street and topographic maps are made of small pictures. With this on, the ones you look at are "
-              "downloaded from openstreetmap.org and opentopomap.org, which tells those sites roughly where you are "
-              "looking, and kept for next time. Off, only maps already on the device are shown.",
+              "downloaded from openstreetmap.org, opentopomap.org or the USGS, which tells them roughly where you "
+              "are looking, and kept for next time. Off, only maps already on the device are shown.",
               [a]() {
                   const bool on = tiles::downloads();
                   a->push(make_confirm(*a, "Map downloads",

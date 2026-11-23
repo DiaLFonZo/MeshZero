@@ -64,7 +64,13 @@ std::string age_str(uint32_t then_s, uint32_t now);
 // Great-circle distance in metres and initial bearing in degrees.
 double geo_distance_m(double lat1, double lon1, double lat2, double lon2);
 double geo_bearing_deg(double lat1, double lon1, double lat2, double lon2);
+// "850m", "12.3km"; or "500ft", "7.6mi" once distances are set to be shown
+// in feet and miles.
 std::string distance_str(double metres);
+void set_imperial_distances(bool on);
+bool imperial_distances();
+constexpr double kFootM = 0.3048;
+constexpr double kMileM = 1609.344;
 
 // Web Mercator, the projection map tiles use. A position becomes a point in
 // the world at a zoom level, in pixels: 256 per tile, x east from 180 W and y

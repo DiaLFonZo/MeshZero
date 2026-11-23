@@ -14,7 +14,8 @@ namespace {
 
 constexpr size_t kDefaultAccent = 3;  // Green
 size_t g_accent                 = kDefaultAccent;
-bool g_accent_loaded            = false;
+bool g_appearance_loaded        = false;
+bool g_imperial                 = false;
 
 std::string appearance_file()
 {
@@ -32,33 +33,58 @@ const std::vector<Accent>& accents()
     return list;
 }
 
-size_t accent_index()
+void load_appearance()
 {
-    if (!g_accent_loaded) {
-        g_accent_loaded = true;
-        std::ifstream in(appearance_file());
-        std::string key, value;
-        while (in >> key >> value) {
-            if (key != "accent") continue;
-            for (size_t i = 0; i < accents().size(); ++i) {
-                if (value == accents()[i].name) g_accent = i;
-            }
+    if (g_appearance_loaded) return;
+    g_appearance_loaded = true;
+    std::ifstream in(appearance_file());
+    std::string key, value;
+    while (in >> key >> value) {
+        if (key == "units") g_imperial = value == "imperial";
+        if (key != "accent") continue;
+        for (size_t i = 0; i < accents().size(); ++i) {
+            if (value == accents()[i].name) g_accent = i;
         }
     }
+    set_imperial_distances(g_imperial);
+}
+
+void save_appearance()
+{
+    make_dirs(user_state_dir());
+    std::ofstream out(appearance_file() + ".tmp", std::ios::trunc);
+    if (!out) return;
+    out << "accent " << accents()[g_accent].name << '\n' << "units " << (g_imperial ? "imperial" : "metric") << '\n';
+    out.close();
+    rename((appearance_file() + ".tmp").c_str(), appearance_file().c_str());
+}
+
+size_t accent_index()
+{
+    load_appearance();
     return g_accent;
 }
 
 void set_accent(size_t index)
 {
     if (index >= accents().size()) return;
-    g_accent        = index;
-    g_accent_loaded = true;
-    make_dirs(user_state_dir());
-    std::ofstream out(appearance_file() + ".tmp", std::ios::trunc);
-    if (!out) return;
-    out << "accent " << accents()[index].name << '\n';
-    out.close();
-    rename((appearance_file() + ".tmp").c_str(), appearance_file().c_str());
+    load_appearance();
+    g_accent = index;
+    save_appearance();
+}
+
+bool imperial()
+{
+    load_appearance();
+    return g_imperial;
+}
+
+void set_imperial(bool on)
+{
+    load_appearance();
+    g_imperial = on;
+    set_imperial_distances(on);
+    save_appearance();
 }
 
 lv_color_t c_bg()

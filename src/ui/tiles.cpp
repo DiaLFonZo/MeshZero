@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ui/tiles.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
@@ -26,18 +27,24 @@
 // Only the C interface of the PNG decoder that comes with LVGL is used.
 #define LODEPNG_NO_COMPILE_CPP
 #include "src/libs/lodepng/lodepng.h"
+extern "C" {
+#include "src/libs/tjpgd/tjpgd.h"
+}
 
 extern char** environ;
 
 namespace mz::tiles {
 namespace {
 
-// Both are free to use without a key, for light use that names the program
-// asking and keeps what it downloaded. Neither allows fetching whole regions
-// ahead of time, so only tiles that are looked at are asked for.
+// All are free to use without a key. The first two are for light use that
+// names the program asking and keeps what it downloaded, and do not allow
+// fetching whole regions ahead of time, so only tiles that are looked at are
+// asked for.
 const Layer kLayers[kLayerCount] = {
-    {"street", "Street", "https://tile.openstreetmap.org/", "(c) OpenStreetMap", 19},
-    {"topo", "Topo", "https://tile.opentopomap.org/", "(c) OpenStreetMap, SRTM, OpenTopoMap", 17},
+    {"street", "Street", "https://tile.openstreetmap.org/", "(c) OpenStreetMap", 19, ".png", false},
+    {"topo", "Topo", "https://tile.opentopomap.org/", "(c) OpenStreetMap, SRTM, OpenTopoMap", 17, ".png", false},
+    {"usgs", "US Topo", "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/",
+     "USGS The National Map", 16, ".jpg", true},
 };
 
 constexpr size_t kPixels       = static_cast<size_t>(kTilePx) * kTilePx;
@@ -45,6 +52,7 @@ constexpr size_t kDecodedMax   = 24;     // tiles kept decoded, 128 KB each
 constexpr size_t kQueueMax     = 32;
 constexpr size_t kBatch        = 8;      // tiles per curl run, over one connection
 constexpr uint64_t kRetryMs    = 60000;  // before a tile that failed is asked for again
+constexpr uint64_t kAbsentMs   = 600000; // the same for one the server says it does not have
 constexpr uint64_t kBackoffMs  = 5000;   // pause after a run that brought nothing
 constexpr size_t kTileBytesMax = 2 * 1024 * 1024;
 
@@ -57,7 +65,7 @@ uint64_t key_of(int layer, int z, int x, int y)
 std::string path_of(int layer, int z, int x, int y)
 {
     return dir() + "/" + kLayers[layer].id + "/" + std::to_string(z) + "/" + std::to_string(x) + "/" +
-           std::to_string(y) + ".png";
+           std::to_string(y) + kLayers[layer].ext;
 }
 
 // ---- decoded tiles (interface thread) ---------------------------------------
@@ -80,7 +88,7 @@ bool read_file(const std::string& path, std::vector<uint8_t>& out)
     return !out.empty() && out.size() <= kTileBytesMax;
 }
 
-bool decode(const std::vector<uint8_t>& png, std::vector<uint16_t>& px)
+bool decode_png(const std::vector<uint8_t>& png, std::vector<uint16_t>& px)
 {
     // LVGL's copy of the decoder gives back one of its draw buffers, holding
     // red, green, blue and alpha bytes, where the original gives bare pixels.
@@ -98,6 +106,66 @@ bool decode(const std::vector<uint8_t>& png, std::vector<uint16_t>& px)
     }
     if (buf) lv_draw_buf_destroy(buf);
     return ok;
+}
+
+// JPEG, through the small decoder that comes with LVGL.
+struct JpegJob {
+    const std::vector<uint8_t>* in;
+    size_t pos;
+    std::vector<uint16_t>* px;
+};
+
+size_t jpeg_in(JDEC* jd, uint8_t* buf, size_t len)
+{
+    JpegJob* job = static_cast<JpegJob*>(jd->device);
+    len          = std::min(len, job->in->size() - job->pos);
+    if (buf) memcpy(buf, job->in->data() + job->pos, len);
+    job->pos += len;
+    return len;
+}
+
+int jpeg_out(JDEC* jd, void* bitmap, JRECT* rect)
+{
+    JpegJob* job     = static_cast<JpegJob*>(jd->device);
+    const uint8_t* p = static_cast<const uint8_t*>(bitmap);
+    for (int y = rect->top; y <= rect->bottom; ++y) {
+        for (int x = rect->left; x <= rect->right; ++x, p += 3) {
+            if (x >= kTilePx || y >= kTilePx) continue;
+            (*job->px)[static_cast<size_t>(y) * kTilePx + x] =
+                static_cast<uint16_t>(((p[0] & 0xf8) << 8) | ((p[1] & 0xfc) << 3) | (p[2] >> 3));
+        }
+    }
+    return 1;
+}
+
+bool decode_jpeg(const std::vector<uint8_t>& jpeg, std::vector<uint16_t>& px)
+{
+    std::vector<uint8_t> work(16384);
+    JpegJob job{&jpeg, 0, &px};
+    JDEC jd{};
+    if (jd_prepare(&jd, jpeg_in, work.data(), work.size(), &job) != JDR_OK) return false;
+    if (jd.width != kTilePx || jd.height != kTilePx) return false;
+    px.assign(kPixels, 0);
+    return jd_decomp(&jd, jpeg_out, 0) == JDR_OK;
+}
+
+bool is_jpeg(const uint8_t* head, size_t n)
+{
+    return n >= 3 && head[0] == 0xff && head[1] == 0xd8 && head[2] == 0xff;
+}
+
+bool is_png(const uint8_t* head, size_t n)
+{
+    static const uint8_t magic[8] = {0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
+    return n >= sizeof(magic) && memcmp(head, magic, sizeof(magic)) == 0;
+}
+
+// What the file is called does not decide how it is read; what is in it does.
+bool decode(const std::vector<uint8_t>& file, std::vector<uint16_t>& px)
+{
+    if (is_png(file.data(), file.size())) return decode_png(file, px);
+    if (is_jpeg(file.data(), file.size())) return decode_jpeg(file, px);
+    return false;
 }
 
 // ---- settings ---------------------------------------------------------------
@@ -121,7 +189,7 @@ void load_locked()
     while (in >> key >> value) {
         if (key == "downloads") g_downloads = value != "0";
         if (key == "layer") {
-            for (int i = 0; i < kLayerCount; ++i) {
+            for (const int i : {kStreet, kTopo}) {
                 if (value == kLayers[i].id) g_layer = i;
             }
         }
@@ -146,20 +214,25 @@ struct Request {
 };
 std::deque<Request> g_queue;  // newest first: what is on screen now matters most
 std::unordered_set<uint64_t> g_wanted;             // queued or being fetched
-std::unordered_map<uint64_t, uint64_t> g_failed;   // when a tile last could not be had
+std::unordered_map<uint64_t, uint64_t> g_failed;   // until when a tile is not asked for again
+std::unordered_set<uint64_t> g_absent;             // tiles a server said it does not have
 bool g_worker = false;
 std::atomic<uint32_t> g_revision{0};
 std::atomic<bool> g_failing{false};
 
-bool is_png(const std::string& path)
+// What a download left behind: a tile, something else the server said
+// instead (it has no such tile), or nothing (it was not reached).
+enum class Got { Tile, Refused, Nothing };
+
+Got what_came(const std::string& path)
 {
-    static const uint8_t magic[8] = {0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
-    uint8_t head[8]               = {};
-    FILE* f                       = fopen(path.c_str(), "rb");
-    if (!f) return false;
+    uint8_t head[8] = {};
+    FILE* f         = fopen(path.c_str(), "rb");
+    if (!f) return Got::Nothing;
     const size_t n = fread(head, 1, sizeof(head), f);
     fclose(f);
-    return n == sizeof(head) && memcmp(head, magic, sizeof(magic)) == 0;
+    if (n == 0) return Got::Nothing;
+    return is_png(head, n) || is_jpeg(head, n) ? Got::Tile : Got::Refused;
 }
 
 // Runs curl with the arguments as they are, no shell in between, and waits.
@@ -198,7 +271,9 @@ void worker()
             }
         }
         // The servers ask for a name that says which program this is.
-        std::vector<std::string> args = {"curl", "-fsSL", "--connect-timeout", "10", "--max-time", "40", "-A",
+        // Without -f: what a server says in place of a tile it does not have is
+        // kept long enough to tell that apart from not reaching it.
+        std::vector<std::string> args = {"curl", "-sSL", "--connect-timeout", "10", "--max-time", "40", "-A",
                                          "MeshZero/" MESHZERO_VERSION " (+https://github.com/s0liton/MeshZero)"};
         std::vector<std::string> paths;
         for (const Request& r : batch) {
@@ -207,37 +282,42 @@ void worker()
             paths.push_back(path);
             args.push_back("-o");
             args.push_back(path + ".part");
-            args.push_back(std::string(kLayers[r.layer].url) + std::to_string(r.z) + "/" + std::to_string(r.x) + "/" +
-                           std::to_string(r.y) + ".png");
+            const Layer& l = kLayers[r.layer];
+            args.push_back(l.row_first ? std::string(l.url) + std::to_string(r.z) + "/" + std::to_string(r.y) + "/" +
+                                             std::to_string(r.x)
+                                       : std::string(l.url) + std::to_string(r.z) + "/" + std::to_string(r.x) + "/" +
+                                             std::to_string(r.y) + ".png");
         }
         run_curl(args);
 
-        size_t got = 0;
+        size_t got = 0, answered = 0;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             for (size_t i = 0; i < batch.size(); ++i) {
                 const std::string part = paths[i] + ".part";
+                const Got came         = what_came(part);
                 g_wanted.erase(batch[i].key);
-                if (is_png(part) && rename(part.c_str(), paths[i].c_str()) == 0) {
+                if (came != Got::Nothing) ++answered;
+                if (came == Got::Tile && rename(part.c_str(), paths[i].c_str()) == 0) {
                     g_failed.erase(batch[i].key);
                     ++got;
                 } else {
                     unlink(part.c_str());
-                    g_failed[batch[i].key] = now_ms();
+                    g_failed[batch[i].key] = now_ms() + (came == Got::Refused ? kAbsentMs : kRetryMs);
+                    if (came == Got::Refused) g_absent.insert(batch[i].key);
                 }
             }
         }
-        g_failing = got == 0;
-        if (got != 0) {
-            ++g_revision;
-        } else {
+        g_failing = answered == 0;
+        ++g_revision;  // also when nothing came: what is shown about it changes
+        if (answered == 0) {
             // Offline, or no curl: what is still queued would fail the same way.
             {
                 std::lock_guard<std::mutex> lock(g_mutex);
-                const uint64_t now = now_ms();
+                const uint64_t until = now_ms() + kRetryMs;
                 for (const Request& r : g_queue) {
                     g_wanted.erase(r.key);
-                    g_failed[r.key] = now;
+                    g_failed[r.key] = until;
                 }
                 g_queue.clear();
             }
@@ -252,7 +332,7 @@ void request(int layer, int z, int x, int y)
     std::lock_guard<std::mutex> lock(g_mutex);
     load_locked();
     if (!g_downloads || g_wanted.count(key)) return;
-    if (const auto it = g_failed.find(key); it != g_failed.end() && now_ms() - it->second < kRetryMs) return;
+    if (const auto it = g_failed.find(key); it != g_failed.end() && now_ms() < it->second) return;
     g_wanted.insert(key);
     g_queue.push_front({key, layer, z, x, y});
     while (g_queue.size() > kQueueMax) {
@@ -304,6 +384,12 @@ const uint16_t* get(int layer, int zoom, int x, int y, bool want)
     return g_decoded.front().px.data();
 }
 
+bool absent(int layer, int zoom, int x, int y)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_absent.count(key_of(layer, zoom, x, y)) != 0;
+}
+
 uint32_t revision()
 {
     return g_revision;
@@ -352,7 +438,7 @@ void save_layer(int index)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
     load_locked();
-    if (index == g_layer || index >= kLayerCount) return;
+    if (index == g_layer || index > kTopo) return;
     g_layer = index < 0 ? -1 : index;
     save_locked();
 }
