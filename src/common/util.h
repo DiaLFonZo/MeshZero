@@ -39,6 +39,9 @@ std::string unescape_field(const std::string& text);
 
 std::vector<std::string> split(const std::string& text, char sep);
 std::string trim(const std::string& text);
+// Whether text contains needle, taking upper and lower case ASCII letters as
+// the same. An empty needle is in every text.
+bool contains_nocase(const std::string& text, const std::string& needle);
 
 // Compares dotted version numbers such as "0.1.10" and "0.2": below zero,
 // zero or above zero as a is older than, the same as or newer than b. A part
@@ -64,8 +67,30 @@ std::string age_str(uint32_t then_s, uint32_t now);
 // Great-circle distance in metres and initial bearing in degrees.
 double geo_distance_m(double lat1, double lon1, double lat2, double lon2);
 double geo_bearing_deg(double lat1, double lon1, double lat2, double lon2);
-std::string distance_str(double metres);
+// "850m", "12.3km"; or, in feet and miles, "500ft", "7.67mi".
+std::string distance_str(double metres, bool imperial = false);
+// A height above sea level, given in metres: "152 m" or "499 ft".
+std::string altitude_str(int metres, bool imperial = false);
+constexpr double kFootM = 0.3048;
+constexpr double kMileM = 1609.344;
+
+// Web Mercator, the projection map tiles use. A position becomes a point in
+// the world at a zoom level, in pixels: 256 per tile, x east from 180 W and y
+// south from about 85 N. Latitudes beyond the projection's edge are held at it.
+constexpr int kTilePx = 256;
+void geo_to_world_px(double lat, double lon, int zoom, double& x, double& y);
+void world_px_to_geo(double x, double y, int zoom, double& lat, double& lon);
+// How many metres one pixel covers at a latitude and zoom.
+double metres_per_px(double lat, int zoom);
 const char* compass_point(double bearing_deg);
+
+// Which way the top of the screen points, in degrees clockwise from magnetic
+// north, from what a magnetometer and an accelerometer read. Both are given in
+// the device's own directions: x to the right of the screen, y to its top, z
+// out of it towards whoever looks at it; the accelerometer reads upwards at
+// rest. Held upright, it is the way the back of the device faces. False when
+// it cannot be told: in free fall, or with the field straight up or down.
+bool tilt_heading(const double mag[3], const double acc[3], double& deg);
 
 // The charge of this device's battery in percent, as the kernel reports it
 // under `root`, or -1 when it has none. Batteries of accessories, such as a

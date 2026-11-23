@@ -14,7 +14,9 @@ namespace {
 
 constexpr size_t kDefaultAccent = 3;  // Green
 size_t g_accent                 = kDefaultAccent;
-bool g_accent_loaded            = false;
+bool g_appearance_loaded        = false;
+bool g_imperial                 = false;
+Sounds g_sounds                 = Sounds::All;
 
 std::string appearance_file()
 {
@@ -32,33 +34,83 @@ const std::vector<Accent>& accents()
     return list;
 }
 
-size_t accent_index()
+void load_appearance()
 {
-    if (!g_accent_loaded) {
-        g_accent_loaded = true;
-        std::ifstream in(appearance_file());
-        std::string key, value;
-        while (in >> key >> value) {
-            if (key != "accent") continue;
-            for (size_t i = 0; i < accents().size(); ++i) {
-                if (value == accents()[i].name) g_accent = i;
-            }
+    if (g_appearance_loaded) return;
+    g_appearance_loaded = true;
+    std::ifstream in(appearance_file());
+    std::string key, value;
+    while (in >> key >> value) {
+        if (key == "units") g_imperial = value == "imperial";
+        if (key == "sounds") g_sounds = value == "off" ? Sounds::Off : value == "direct" ? Sounds::Direct : Sounds::All;
+        if (key != "accent") continue;
+        for (size_t i = 0; i < accents().size(); ++i) {
+            if (value == accents()[i].name) g_accent = i;
         }
     }
+}
+
+void save_appearance()
+{
+    make_dirs(user_state_dir());
+    std::ofstream out(appearance_file() + ".tmp", std::ios::trunc);
+    if (!out) return;
+    out << "accent " << accents()[g_accent].name << '\n' << "units " << (g_imperial ? "imperial" : "metric") << '\n'
+        << "sounds " << (g_sounds == Sounds::Off ? "off" : g_sounds == Sounds::Direct ? "direct" : "all") << '\n';
+    out.close();
+    rename((appearance_file() + ".tmp").c_str(), appearance_file().c_str());
+}
+
+size_t accent_index()
+{
+    load_appearance();
     return g_accent;
 }
 
 void set_accent(size_t index)
 {
     if (index >= accents().size()) return;
-    g_accent        = index;
-    g_accent_loaded = true;
-    make_dirs(user_state_dir());
-    std::ofstream out(appearance_file() + ".tmp", std::ios::trunc);
-    if (!out) return;
-    out << "accent " << accents()[index].name << '\n';
-    out.close();
-    rename((appearance_file() + ".tmp").c_str(), appearance_file().c_str());
+    load_appearance();
+    g_accent = index;
+    save_appearance();
+}
+
+bool imperial()
+{
+    load_appearance();
+    return g_imperial;
+}
+
+void set_imperial(bool on)
+{
+    load_appearance();
+    g_imperial = on;
+    save_appearance();
+}
+
+Sounds sounds()
+{
+    load_appearance();
+    return g_sounds;
+}
+
+void set_sounds(Sounds mode)
+{
+    load_appearance();
+    g_sounds = mode;
+    save_appearance();
+}
+
+const char* sounds_name(Sounds mode)
+{
+    switch (mode) {
+        case Sounds::Off:
+            return "Off";
+        case Sounds::Direct:
+            return "Direct messages";
+        default:
+            return "All messages";
+    }
 }
 
 lv_color_t c_bg()
@@ -330,6 +382,14 @@ ListView::ListView(lv_obj_t* parent, int x, int y, int w, int h) : w_(w), h_(h)
     lv_obj_set_style_bg_opa(cont_, LV_OPA_70, LV_PART_SCROLLBAR);
     lv_obj_set_style_width(cont_, 2, LV_PART_SCROLLBAR);
     lv_obj_remove_flag(cont_, LV_OBJ_FLAG_CLICKABLE);
+}
+
+void ListView::set_height(int h)
+{
+    if (h == h_) return;
+    h_ = h;
+    lv_obj_set_height(cont_, h);
+    if (!rows_.empty()) select(selected_);
 }
 
 bool ListView::selectable(int index) const

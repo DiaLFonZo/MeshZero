@@ -68,7 +68,7 @@ set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/s0liton/MeshZero")
 # The first line covers MeshZero's own programs; the rest is what the bundled
 # radio daemon links against (taken from its upstream Debian 13 package).
 set(CPACK_DEBIAN_PACKAGE_DEPENDS
-    "libc6 (>= 2.38), libstdc++6 (>= 11), libgcc-s1, adduser, libgpiod3 (>= 2.1), libi2c0 (>= 4.0), libinput10, liborcania2.3, libsdl2-2.0-0, libssl3t64, libulfius2.7t64, libusb-1.0-0, libuv1t64, libx11-6, libxkbcommon0, libyaml-cpp0.8")
+    "libc6 (>= 2.38), libstdc++6 (>= 11), libgcc-s1, libsystemd0, adduser, libgpiod3 (>= 2.1), libi2c0 (>= 4.0), libinput10, liborcania2.3, libsdl2-2.0-0, libssl3t64, libulfius2.7t64, libusb-1.0-0, libuv1t64, libx11-6, libxkbcommon0, libyaml-cpp0.8")
 # Scanning QR codes with the camera uses rpicam-vid when it is there.
 set(CPACK_DEBIAN_PACKAGE_SUGGESTS "rpicam-apps | rpicam-apps-lite")
 # Looking for a newer release uses curl when it is there.

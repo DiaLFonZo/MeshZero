@@ -19,6 +19,7 @@
 #include "ui/display.h"
 #include "ui/keys.h"
 #include "ui/mesh.h"
+#include "ui/sound.h"
 #include "ui/update.h"
 
 using namespace mz;
@@ -35,6 +36,16 @@ void on_signal(int)
 uint32_t tick_cb()
 {
     return static_cast<uint32_t>(now_ms());
+}
+
+// LVGL's TrueType loader reports "cache not allocated" each time a font in the
+// fallback chain lacks a character, which is how the chain is meant to work:
+// the next font is tried. Left alone it fills the log on every redraw.
+void lvgl_log(lv_log_level_t, const char* line)
+{
+    if (strstr(line, "ttf_get_glyph_dsc_cb: cache not allocated")) return;
+    fputs(line, stdout);
+    fflush(stdout);
 }
 
 void usage()
@@ -192,6 +203,7 @@ int main(int argc, char** argv)
     signal(SIGPIPE, SIG_IGN);
 
     lv_init();
+    lv_log_register_print_cb(lvgl_log);
     lv_tick_set_cb(tick_cb);
     if (!display_init(display)) {
         fprintf(stderr, "meshzero: could not initialise the display\n");
@@ -208,6 +220,7 @@ int main(int argc, char** argv)
         app.start();
 
         if (!script.empty()) {
+            sound::set_enabled(false);
             // Scripted runs stay off the network unless told where to look.
             if (getenv("MESHZERO_UPDATE_URL")) update::start();
             rc = run_script(script, app, mesh);

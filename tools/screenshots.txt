@@ -17,8 +17,8 @@ shot screenshots/4-node.png
 key esc
 key tab
 wait 300
-key + +
-wait 300
+key m
+wait 8000
 shot screenshots/5-map.png
 key tab tab
 wait 300

@@ -56,9 +56,33 @@ struct TraceResult {
 struct UiEvent {
     enum Type { NewMessage, Toast, Trace, LinkChanged } type = Toast;
     ChatKey chat;
+    bool bell = false;  // NewMessage: it carries an alert bell
+    bool seen = false;  // NewMessage: its conversation is the one on screen
     std::string text;
     TraceResult trace;
 };
+
+// Sensor readings a node has sent, kept while the app runs: the radio itself
+// only remembers a node's device metrics.
+struct Sensors {
+    bool has_env = false;
+    meshtastic_EnvironmentMetrics env{};
+    uint32_t env_ts = 0;
+    bool has_power = false;
+    meshtastic_PowerMetrics power{};
+    uint32_t power_ts = 0;
+    bool has_air = false;
+    meshtastic_AirQualityMetrics air{};
+    uint32_t air_ts = 0;
+};
+
+enum class TelemetryKind { Device, Environment, Power, AirQuality };
+
+// Whether a message text carries the alert bell character.
+inline bool has_bell(const std::string& text)
+{
+    return text.find('\a') != std::string::npos;
+}
 
 enum class LinkState { Disconnected, Connecting, Syncing, Ready };
 
@@ -87,6 +111,7 @@ public:
     meshtastic_DeviceMetadata metadata{};
     bool has_metadata = false;
     std::map<uint32_t, meshtastic_NodeInfo> nodes;
+    std::map<uint32_t, Sensors> sensors;
     meshtastic_Channel channels[kMaxChannels]{};
     meshtastic_LocalConfig config{};
     meshtastic_LocalModuleConfig modules{};
@@ -112,6 +137,7 @@ public:
     std::string chat_title(const ChatKey& key) const;
     std::string preset_name() const;
     bool channel_enabled(int index) const;
+    // Unread messages in the conversations that are not muted.
     int total_unread() const;
     bool region_unset() const;
     bool my_position(double& lat, double& lon) const;
@@ -121,6 +147,13 @@ public:
     Chat& chat(const ChatKey& key);
     void set_active_chat(const ChatKey* key);
     void mark_read(const ChatKey& key);
+    // A muted conversation makes no sound and shows no notice, and is left out
+    // of the unread count. The radio keeps it: with the channel, or for direct
+    // messages with the node, so other apps on this radio see the same.
+    bool muted(const ChatKey& key) const;
+    // False when it cannot be set: no such channel, or a node the radio does
+    // not know.
+    bool set_muted(const ChatKey& key, bool muted);
     // Deletes the messages of one conversation, or of all, here and in the
     // history the service keeps.
     void delete_history(const ChatKey& key);
@@ -140,7 +173,7 @@ public:
     // the public key. `user_waiting` marks a request someone is looking at the
     // screen for: it goes first and is sent even when the channel is busy.
     void want_info(uint32_t num, bool need_key, bool user_waiting, uint64_t delay_ms = 0);
-    void request_telemetry(uint32_t dest);
+    void request_telemetry(uint32_t dest, TelemetryKind kind = TelemetryKind::Device);
 
     // ---- administration (local node) ---------------------------------
     void admin(meshtastic_AdminMessage& msg, bool want_response = false);
@@ -163,13 +196,34 @@ public:
     // ---- service ----------------------------------------------------
     // Whether other devices on the network may use the API: -1 unknown, 0, 1.
     int network_access = -1;
-    void set_network_access(bool on);
     // Whether the radio keeps running with the app closed: -1 unknown, 0, 1.
     int background = -1;
     void set_background(bool on);
     // Set while the user is to be asked whether to run in the background: the
     // update to 0.2.1 switched it off for them. set_background() answers it.
     bool ask_background = false;
+
+    // Bluetooth for the phone apps, run by the service: -2 unknown, -1 not in
+    // this build, 0, 1. The rest is what the service last said about it.
+    int bluetooth     = -2;
+    int bluetooth_pin = -1;       // pairing with a code: -1 unknown, 0, 1
+    bool bluetooth_ok = false;    // phones can find it right now
+    std::string bluetooth_name;
+    std::string bluetooth_why;    // why it is not working, when it is not
+    std::string bluetooth_key;    // the code to type on a phone that is pairing
+    int bluetooth_conn   = 0;     // phones connected over Bluetooth right now
+    int bluetooth_paired = 0;     // phones paired
+    std::string bluetooth_peer;   // the name of a connected phone
+    int network_conn     = 0;     // apps connected from other devices over the network
+    void set_bluetooth_pin(bool on);
+    // Drops the pairing with every phone. Each phone has to forget this
+    // device as well before it can pair again.
+    void forget_bluetooth_phones();
+    // How other apps reach this radio; one way at a time, which the service
+    // sees to. -1 while it is not known yet.
+    enum AppConnection { kAppOff = 0, kAppWifi = 1, kAppBluetooth = 2 };
+    int app_connection() const;
+    void set_app_connection(int mode);
 
     void toast(const std::string& text);
 

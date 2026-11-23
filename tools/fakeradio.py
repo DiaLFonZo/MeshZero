@@ -61,6 +61,7 @@ class Radio:
         self.owner_short = "MZ01"
         self.packet_id = random.randrange(1, 1 << 30)
         self.nodeinfo_ignored = 0
+        self.muted = set()
 
         self.lora = config_pb2.Config.LoRaConfig(
             use_preset=True, hop_limit=3, tx_enabled=True, tx_power=0,
@@ -150,8 +151,35 @@ class Radio:
             info.device_metrics.air_util_tx = 0.2 * (i + 1)
             info.device_metrics.uptime_seconds = 3600 * (i + 2)
             info.is_favorite = i == 0
+            if num in self.muted:
+                info.is_muted = True
             out.append(info)
         return out
+
+    # What the weather station's sensors read, as a node with them attached sends it.
+    def sensor_readings(self, kind):
+        t = telemetry_pb2.Telemetry(time=int(time.time()))
+        if kind == "environment_metrics":
+            t.environment_metrics.temperature = 11.4
+            t.environment_metrics.relative_humidity = 83
+            t.environment_metrics.barometric_pressure = 1009.6
+            t.environment_metrics.wind_speed = 7.2
+            t.environment_metrics.wind_direction = 245
+            t.environment_metrics.wind_gust = 12.5
+            t.environment_metrics.rainfall_24h = 3.4
+        elif kind == "power_metrics":
+            t.power_metrics.ch1_voltage = 13.12
+            t.power_metrics.ch1_current = 412.0
+            t.power_metrics.ch2_voltage = 18.4
+            t.power_metrics.ch2_current = 655.5
+        elif kind == "air_quality_metrics":
+            t.air_quality_metrics.pm10_standard = 4
+            t.air_quality_metrics.pm25_standard = 7
+            t.air_quality_metrics.pm100_standard = 9
+            t.air_quality_metrics.co2 = 431
+        else:
+            return None
+        return t
 
     # ------------------------------------------------------------ config
     def send_config(self, nonce):
@@ -252,9 +280,20 @@ class Radio:
                 if node.num == dest:
                     self.deliver(dest, MY_NUM, port, node.position.SerializeToString(), request_id=packet.id, delay=1.5)
         elif port == portnums_pb2.TELEMETRY_APP and dest in known:
+            asked = telemetry_pb2.Telemetry()
+            asked.ParseFromString(packet.decoded.payload)
+            kind = asked.WhichOneof("variant") or "device_metrics"
+            print("telemetry request: %s %s" % (known[dest][1], kind), flush=True)
             for node in self.other_nodes():
-                if node.num == dest:
+                if node.num != dest:
+                    continue
+                if kind == "device_metrics":
                     t = telemetry_pb2.Telemetry(time=int(time.time()), device_metrics=node.device_metrics)
+                elif known[dest][1] == "WX01":
+                    t = self.sensor_readings(kind)  # only the weather station has sensors
+                else:
+                    t = None
+                if t is not None:
                     self.deliver(dest, MY_NUM, port, t.SerializeToString(), request_id=packet.id, delay=1.5)
 
     def on_admin(self, packet):
@@ -272,6 +311,11 @@ class Radio:
             self.modules[name] = getattr(admin.set_module_config, name)
         elif which == "set_channel":
             self.channels[admin.set_channel.index] = admin.set_channel
+            print("channel %d muted=%s" % (admin.set_channel.index, admin.set_channel.settings.module_settings.is_muted),
+                  flush=True)
+        elif which == "toggle_muted_node":
+            self.muted ^= {admin.toggle_muted_node}
+            print("node %08x muted=%s" % (admin.toggle_muted_node, admin.toggle_muted_node in self.muted), flush=True)
         print("admin:", which, flush=True)
         self.ack(MY_NUM, packet.id, delay=0.1)
 
@@ -303,8 +347,18 @@ class Radio:
         stats.local_stats.num_total_nodes = 9
         stats.local_stats.noise_floor = -104
         self.deliver(MY_NUM, MY_NUM, portnums_pb2.TELEMETRY_APP, stats.SerializeToString())
+        self.deliver(0xA1B2C306, BROADCAST, portnums_pb2.TELEMETRY_APP,
+                     self.sensor_readings("environment_metrics").SerializeToString(), hops=2)
         self.deliver(0xA1B2C302, MY_NUM, portnums_pb2.TEXT_MESSAGE_APP, b"Hey, are you bringing the antenna tonight?",
                      delay=1.0, pki=True)
+        if self.args.bell:
+            time.sleep(self.args.bell)
+            self.deliver(0xA1B2C307, BROADCAST, portnums_pb2.TEXT_MESSAGE_APP,
+                         "\U0001F514 Storm warning for the coast\a".encode())
+            self.deliver(0xA1B2C304, MY_NUM, portnums_pb2.TEXT_MESSAGE_APP, b"Did you see the warning?", hops=1,
+                         delay=6.0, pki=True)
+            self.deliver(0xA1B2C301, BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, b"Thanks Eva, tying things down.",
+                         delay=9.0)
         if self.args.stranger:
             time.sleep(2.0)
             self.deliver(STRANGER[0], BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, b"First time on this mesh, hello!",
@@ -367,6 +421,13 @@ if __name__ == "__main__":
                         help="leave the first N node info requests unanswered")
     parser.add_argument("--stranger", action="store_true",
                         help="a node missing from the node list posts on the channel and sends a direct message")
+    parser.add_argument("--bell", type=float, default=0, metavar="SECONDS",
+                        help="this long after the chatter a message with an alert bell arrives on the channel, "
+                             "then a direct message and one more on the channel")
     parser.add_argument("--chatter-delay", type=float, default=2.0)
     parser.add_argument("--chatter-gap", type=float, default=0.7)
-    Radio(parser.parse_args()).serve()
+    parser.add_argument("--home", metavar="LAT,LON", help="where the mesh is, instead of Amsterdam")
+    options = parser.parse_args()
+    if options.home:
+        HOME = tuple(float(v) for v in options.home.split(","))
+    Radio(options).serve()

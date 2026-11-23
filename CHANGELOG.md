@@ -1,10 +1,36 @@
 # Changelog
 
+## 0.3.0
+Since we've been relatively low on bugs, I was able to focus on bringing robust map support, an early access for Bluetooth connection support, Alert sounds, Sensor Telemetry and enhancements to the node list. We're close to full feature parity friends, so keep reporting issues and suggesting features. 
+
+**Added**
+- **Enhanced Map Support:** Topographic and terrain maps are now available on device. No API keys are 
+needed to download the map tiles today.
+- **Basic Bluetooth Support:** An early access implementation for bluetooth. Tested on iOS so far, not yet on Android, and may be buggy. Please report any issues. Set Setup > App connection to Bluetooth, then pick the device in the Meshtastic phone app.
+- **Alert Sounds:** Sounds will let you know when messages arrive. Setup > Sounds picks all messages, direct messages only, or off.
+- **Mute:** M on a chat mutes it. The radio remembers it, so the phone apps see the same.
+- **Alert bell:** Ctrl+G while writing sends a message that rings on the other side. Incoming ones ring here too, even in a muted chat.
+- **Telemetry:** A node's page now shows what its sensors send: Environment, Power and Air quality. Request telemetry lets you pick which.
+
+- **Delivery status for messages sent from a phone:** A message sent from a phone app through the Cardputer now shows its tick here too.
+
+**Enhanced**
+- **Node List:** Now has more filter options, searching, and sorting to be more useful for those in really busy areas trying to find a needle in a haystack of nodes. V filters, / searches by name or ID.
+
+**Changed**
+- **App connection:** "Network Access (LAN)" is now Setup > App connection, where you pick Off, Wi-Fi or Bluetooth. Only one is on at a time.
+
+**Fixed**
+
+- **Messages stuck on pending (#13):** after 512 sent messages, any message still waiting for its acknowledgement stayed "pending" forever. Only the oldest tracked messages are forgotten now.
+- **Errors in the log (#12):** "cache not allocated" no longer fills the log whenever an emoji or other character outside the main font is on screen.
+- **Damaged message history:** a delivery status in the message log that isn't a valid value is ignored.
+
 ## 0.2.1
 
 **Fixed**
 
-- **Run in background is opt-in (#9):** it's off unless switched on. The update turns it off for everyone, and asks once at launch anyone who had it on whether to keep it.
+- **Run in background is opt-in (#9):** it's off unless switched on. The update turns it off for everyone, and asks once at launch anyone who had it on whether to keep it. When the background service is on, it holds control over your Cap LoRa and other apps cannot use it. Some users were not aware of this, believing their other apps were simply broken. The background service is now an opt-in feature.
 - **Frequency outside the region (#8):** any frequency the radio can tune to (150–960 MHz) can be set. If outside of region's legal frequency, a warning is shown.
 - **Short names (#6):** nodes heard without a name are asked for their info in the background.
 - **Coding rate:** LongSlow, LongModerate and LongTurbo defaults were being saved at 4/5 instead of 4/8. The app now sends the right rate, and corrects radios already affected once, with a toast.
@@ -15,7 +41,7 @@
 
 **Added**
 
-- ? key in Setup menu explains the highlighted settings
+- ? key in Setup menu explains the highlighted setting in detail.
 - Battery percentage in the top bar.
 - Accent color choice.
 - Held arrow keys repeat.

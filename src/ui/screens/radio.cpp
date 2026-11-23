@@ -11,8 +11,6 @@
 #include "ui/app.h"
 
 namespace mz {
-namespace {
-
 std::vector<std::string> local_addresses()
 {
     std::vector<std::string> out;
@@ -31,6 +29,8 @@ std::vector<std::string> local_addresses()
     freeifaddrs(list);
     return out;
 }
+
+namespace {
 
 std::string fmt(const char* format, double value)
 {
@@ -78,12 +78,17 @@ public:
                 row("Radio", mesh.offline_text(), true);
                 break;
         }
-        if (mesh.network_access != 1) {
-            row("Network Access (LAN)", "off");
+        if (mesh.app_connection() == Mesh::kAppBluetooth) {
+            row("App connection",
+                mesh.bluetooth_conn > 0 ? "Bluetooth, " + (mesh.bluetooth_peer.empty() ? std::string("connected") : mesh.bluetooth_peer)
+                                        : "Bluetooth, " + (mesh.bluetooth_name.empty() ? std::string("starting") : mesh.bluetooth_name),
+                !mesh.bluetooth_ok);
+        } else if (mesh.app_connection() != Mesh::kAppWifi) {
+            row("App connection", "off");
         } else {
             const std::vector<std::string> addrs = local_addresses();
-            if (addrs.empty()) row("Network Access (LAN)", "no network", true);
-            for (const auto& a : addrs) row("Network Access (LAN)", a + ":4403");
+            if (addrs.empty()) row("App connection", "Wi-Fi, no network", true);
+            for (const auto& a : addrs) row("App connection", a + ":4403");
         }
 
         if (mesh.ever_ready()) {
@@ -148,7 +153,7 @@ public:
                 char buf[48];
                 snprintf(buf, sizeof(buf), "%.5f, %.5f", lat, lon);
                 row("Position", buf);
-                if (self->position.has_altitude) row("Altitude", std::to_string(self->position.altitude) + " m");
+                if (self->position.has_altitude) row("Altitude", altitude_str(self->position.altitude, ui::imperial()));
                 if (self->position.sats_in_view) row("Satellites", std::to_string(self->position.sats_in_view));
                 if (self->position.time) row("Fix age", age_str(self->position.time, now_s()));
             } else if (mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED) {
@@ -274,11 +279,27 @@ const char* const kHelp =
     "MESSAGES\n"
     "Colored tick: delivered. Grey tick: relayed. Cross: failed.\n"
     "To message someone, open them in Nodes.\n"
-    "Del on a chat in Chats, or Delete chat history in a message's menu, deletes its messages.\n\n"
+    "Del on a chat in Chats, or Delete chat history in a message's menu, deletes its messages.\n"
+    "M on a chat in Chats mutes it: no sound, no notice, and it is left out of the unread count. The radio "
+    "keeps that, so the phone apps see it too.\n"
+    "Ctrl+G while writing sends the message with an alert bell, which rings on the other side. Sounds in Setup "
+    "chooses which messages make a sound here.\n\n"
+    "NODES\n"
+    "S changes the order. V chooses which nodes are listed: online, heard directly, favorites and so on. / finds "
+    "a node by name or ID as you type; Esc brings all of them back. A node's page shows what its sensors last "
+    "sent while MeshZero was open; Request telemetry asks for more.\n\n"
+    "MAP\n"
+    "On the radar, H makes it turn with the device, so what is ahead of you is at the top; the compass is "
+    "calibrated the first time. M switches between the radar, a street map and a topographic map. Enter lets the arrows move the map; 0 "
+    "brings it back around you. Units in Setup chooses metres or feet, also for the topographic map; the one in "
+    "feet covers the United States. Maps are downloaded as you look at them and kept, so what you have seen "
+    "works without a network. Map downloads in Setup turns that off and shows the folder they are kept in; map "
+    "tiles copied there as street/zoom/x/y.png, topo/zoom/x/y.png or usgs/zoom/x/y.jpg are used too.\n\n"
     "OTHER APPS\n"
     "When you exit, the radio stops so other apps can use the LoRa cap, unless Run in background is on in Setup. "
-    "To use the radio from MeshMonitor or a phone, turn on Network Access (LAN) in Setup. The address is on the "
-    "Radio page.\n\n"
+    "To use the radio from other apps, set App connection in Setup. Wi-Fi is for MeshMonitor or a phone app on "
+    "your network; the address is on the Radio page. Bluetooth (early access) is for a phone app when there is no "
+    "Wi-Fi: pick this device in the phone app. Only one of the two is on at a time.\n\n"
     "RADIO OFFLINE\n"
     "Power off, check the cap, power on. For details run:\n"
     "sudo -u meshzero meshzerod doctor\n\n"

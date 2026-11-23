@@ -184,6 +184,7 @@ void Mesh::send_control(const std::string& request)
     p.which_payload_variant   = meshtastic_MeshPacket_decoded_tag;
     p.decoded.portnum         = meshtastic_PortNum_PRIVATE_APP;
     const std::string text    = "mz:" + request;
+    if (text.size() > sizeof(p.decoded.payload.bytes)) return;
     memcpy(p.decoded.payload.bytes, text.data(), text.size());
     p.decoded.payload.size = static_cast<pb_size_t>(text.size());
     send_to_radio(msg);
@@ -215,9 +216,33 @@ void Mesh::set_background(bool on)
     send_control(on ? "bg=1" : "bg=0");
 }
 
-void Mesh::set_network_access(bool on)
+void Mesh::forget_bluetooth_phones()
 {
-    send_control(on ? "net=1" : "net=0");
+    send_control("btforget");
+}
+
+int Mesh::app_connection() const
+{
+    if (network_access < 0) return -1;
+    return bluetooth == 1 ? kAppBluetooth : network_access == 1 ? kAppWifi : kAppOff;
+}
+
+void Mesh::set_app_connection(int mode)
+{
+    // Switching one on makes the service switch the other off.
+    if (mode == kAppWifi) {
+        send_control("net=1");
+    } else if (mode == kAppBluetooth) {
+        send_control("bt=1");
+    } else {
+        send_control("net=0");
+        if (bluetooth == 1) send_control("bt=0");
+    }
+}
+
+void Mesh::set_bluetooth_pin(bool on)
+{
+    send_control(on ? "btpin=1" : "btpin=0");
 }
 
 void Mesh::request_config()
@@ -329,6 +354,7 @@ void Mesh::on_frame(const std::string& payload)
             if (my_num != 0 && my_num != msg.my_info.my_node_num) {
                 // A different radio identity: everything cached belongs to someone else.
                 nodes.clear();
+                sensors.clear();
                 chats.clear();
                 info_asks_.clear();
                 history_loaded_ = false;
@@ -495,6 +521,26 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
             background = text.back() == '1' ? 1 : 0;
         } else if (text == "mz:bgask=1" || text == "mz:bgask=0") {
             ask_background = text.back() == '1';
+        } else if (text.rfind("mz:btpin=", 0) == 0) {
+            bluetooth_pin = atoi(text.c_str() + 9);
+        } else if (text.rfind("mz:btname=", 0) == 0) {
+            bluetooth_name = text.substr(10);
+        } else if (text.rfind("mz:btok=", 0) == 0) {
+            bluetooth_ok = text.back() == '1';
+        } else if (text.rfind("mz:btwhy=", 0) == 0) {
+            bluetooth_why = text.substr(9);
+        } else if (text.rfind("mz:btkey=", 0) == 0) {
+            bluetooth_key = text.substr(9);
+        } else if (text.rfind("mz:btconn=", 0) == 0) {
+            bluetooth_conn = atoi(text.c_str() + 10);
+        } else if (text.rfind("mz:btpaired=", 0) == 0) {
+            bluetooth_paired = atoi(text.c_str() + 12);
+        } else if (text.rfind("mz:btpeer=", 0) == 0) {
+            bluetooth_peer = text.substr(10);
+        } else if (text.rfind("mz:netconn=", 0) == 0) {
+            network_conn = atoi(text.c_str() + 11);
+        } else if (text.rfind("mz:bt=", 0) == 0) {
+            bluetooth = atoi(text.c_str() + 6);
         }
         ++rev_link;
         ++rev_config;
@@ -570,6 +616,24 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
                 local_stats     = t.variant.local_stats;
                 has_local_stats = true;
                 ++rev_nodes;
+            } else if (t.which_variant == meshtastic_Telemetry_environment_metrics_tag) {
+                Sensors& s = sensors[p.from];
+                s.has_env  = true;
+                s.env      = t.variant.environment_metrics;
+                s.env_ts   = p.rx_time ? p.rx_time : now_s();
+                ++rev_nodes;
+            } else if (t.which_variant == meshtastic_Telemetry_power_metrics_tag) {
+                Sensors& s  = sensors[p.from];
+                s.has_power = true;
+                s.power     = t.variant.power_metrics;
+                s.power_ts  = p.rx_time ? p.rx_time : now_s();
+                ++rev_nodes;
+            } else if (t.which_variant == meshtastic_Telemetry_air_quality_metrics_tag) {
+                Sensors& s = sensors[p.from];
+                s.has_air  = true;
+                s.air      = t.variant.air_quality_metrics;
+                s.air_ts   = p.rx_time ? p.rx_time : now_s();
+                ++rev_nodes;
             }
             break;
         }
@@ -618,6 +682,13 @@ void Mesh::on_text(const meshtastic_MeshPacket& p)
         key = ChatKey{true, m.outgoing ? p.to : p.from};
     }
     const bool incoming = !m.outgoing;
+    // Sent from a phone or another app on this radio: its acknowledgement
+    // comes past here too, so it gets a delivery status like our own.
+    if (m.outgoing && p.want_ack && p.id != 0) {
+        m.ack               = AckState::Pending;
+        pending_acks_[p.id] = key;
+        if (pending_acks_.size() > 256) pending_acks_.erase(pending_acks_.begin());
+    }
     add_message(key, std::move(m), true);
 
     // A sender we have no name for, or no key to answer a direct message with.
@@ -643,10 +714,14 @@ void Mesh::add_message(const ChatKey& key, StoredMsg msg, bool live)
             ++c.unread;
         }
     }
-    if (live && !msg.outgoing && !is_active) {
+    // A message in the conversation on screen needs no notice, but its bell still rings.
+    const bool bell = !msg.is_tapback() && has_bell(msg.text);
+    if (live && !msg.outgoing && (!is_active || bell)) {
         UiEvent ev;
         ev.type = UiEvent::NewMessage;
         ev.chat = key;
+        ev.bell = bell;
+        ev.seen = is_active;
         ev.text = short_name(msg.from) + (msg.is_tapback() ? " reacted " : ": ") + msg.text;
         events.push_back(std::move(ev));
     }
@@ -935,15 +1010,33 @@ void Mesh::pump_info_asks()
     ++rev_chats;  // a chat may now say it is waiting
 }
 
-void Mesh::request_telemetry(uint32_t dest)
+void Mesh::request_telemetry(uint32_t dest, TelemetryKind kind)
 {
+    // A node answers with the kind of readings the request names.
     meshtastic_Telemetry t = meshtastic_Telemetry_init_zero;
-    t.which_variant        = meshtastic_Telemetry_device_metrics_tag;
+    const char* what       = "Telemetry";
+    switch (kind) {
+        case TelemetryKind::Device:
+            t.which_variant = meshtastic_Telemetry_device_metrics_tag;
+            break;
+        case TelemetryKind::Environment:
+            t.which_variant = meshtastic_Telemetry_environment_metrics_tag;
+            what            = "Environment readings";
+            break;
+        case TelemetryKind::Power:
+            t.which_variant = meshtastic_Telemetry_power_metrics_tag;
+            what            = "Power readings";
+            break;
+        case TelemetryKind::AirQuality:
+            t.which_variant = meshtastic_Telemetry_air_quality_metrics_tag;
+            what            = "Air quality readings";
+            break;
+    }
     const std::string bytes      = pb_encode_msg(meshtastic_Telemetry_fields, t);
     const meshtastic_NodeInfo* n = node(dest);
     const uint32_t id = send_packet(dest, n ? n->channel : 0, meshtastic_PortNum_TELEMETRY_APP,
                                     reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), true, true);
-    toast(id ? "Telemetry requested from " + short_name(dest) : "Radio offline");
+    toast(id ? std::string(what) + " requested from " + short_name(dest) : "Radio offline");
 }
 
 // ------------------------------------------------------------------ admin
@@ -1099,6 +1192,7 @@ void Mesh::remove_node(uint32_t num)
     m.remove_by_nodenum       = num;
     admin(m);
     nodes.erase(num);
+    sensors.erase(num);
     ++rev_nodes;
 }
 
@@ -1164,6 +1258,7 @@ void Mesh::nodedb_reset()
         const meshtastic_NodeInfo keep = *self;
         nodes.clear();
         nodes[my_num] = keep;
+        sensors.clear();
     }
     ++rev_nodes;
 }
@@ -1283,8 +1378,46 @@ std::string Mesh::chat_title(const ChatKey& key) const
 int Mesh::total_unread() const
 {
     int total = 0;
-    for (const auto& [key, c] : chats) total += c.unread;
+    for (const auto& [key, c] : chats) {
+        if (!muted(key)) total += c.unread;
+    }
     return total;
+}
+
+bool Mesh::muted(const ChatKey& key) const
+{
+    if (key.dm) {
+        const meshtastic_NodeInfo* n = node(key.id);
+        return n && n->is_muted;
+    }
+    if (key.id >= static_cast<uint32_t>(kMaxChannels)) return false;
+    const meshtastic_ChannelSettings& s = channels[key.id].settings;
+    return s.has_module_settings && s.module_settings.is_muted;
+}
+
+bool Mesh::set_muted(const ChatKey& key, bool mute)
+{
+    if (!ready()) return false;
+    if (muted(key) == mute) return true;
+    if (key.dm) {
+        // The radio only has a switch to flip, and only for nodes it knows.
+        const auto it = nodes.find(key.id);
+        if (it == nodes.end()) return false;
+        meshtastic_AdminMessage m = meshtastic_AdminMessage_init_zero;
+        m.which_payload_variant   = meshtastic_AdminMessage_toggle_muted_node_tag;
+        m.toggle_muted_node       = key.id;
+        admin(m);
+        it->second.is_muted = mute;
+        ++rev_nodes;
+        ++rev_chats;
+        return true;
+    }
+    if (!channel_enabled(static_cast<int>(key.id))) return false;
+    meshtastic_Channel ch                = channels[key.id];
+    ch.settings.has_module_settings      = true;
+    ch.settings.module_settings.is_muted = mute;
+    set_channel(ch);
+    return true;
 }
 
 bool Mesh::region_unset() const

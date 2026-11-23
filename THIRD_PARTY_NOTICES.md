@@ -75,6 +75,31 @@ at https://github.com/google/fonts/tree/main/ofl/notoemoji with fontTools, and
 is kept in `assets/fonts` together with its license. The license texts are
 installed in `/usr/share/doc/meshzero/font-licenses`.
 
+## Map tiles
+
+The street and topographic maps are not part of the package. The tiles a map
+shows are downloaded while it is looked at, when map downloads are on, and
+kept on the device.
+
+- Street: © OpenStreetMap contributors, available under the Open Database
+  License (https://www.openstreetmap.org/copyright). Tiles from
+  tile.openstreetmap.org, under its tile usage policy
+  (https://operations.osmfoundation.org/policies/tiles/).
+- Topo: map data © OpenStreetMap contributors and SRTM; map style
+  © OpenTopoMap (CC-BY-SA, https://opentopomap.org/about).
+- Topo with imperial units, inside the United States: USGS The National Map
+  (https://www.usgs.gov/programs/national-geospatial-program/national-map),
+  in the public domain.
+
+## World Magnetic Model
+
+`src/common/wmm_gen.cpp` holds the coefficients of the World Magnetic Model
+2025, by NOAA's National Centers for Environmental Information and the British
+Geological Survey, used to turn a compass reading into a direction from true
+north. The model is in the public domain.
+
+- Source: https://www.ncei.noaa.gov/products/world-magnetic-model
+
 ## Trademark
 
 Meshtastic® is a registered trademark of Meshtastic LLC. MeshZero is an

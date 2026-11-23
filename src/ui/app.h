@@ -100,6 +100,7 @@ private:
     bool region_prompted_ = false;
     bool coding_rate_checked_ = false;
     bool background_prompted_ = false;
+    std::string pairing_shown_;     // the pairing code its page was last opened for
     int battery_ = -1;              // percent, -1 without a battery
     bool charging_ = false;
     uint64_t battery_read_ms_ = 0;  // when it was last read, 0 if never
@@ -110,6 +111,9 @@ std::unique_ptr<Screen> make_tab(App& app, int tab);
 std::unique_ptr<Screen> make_chats(App& app);
 std::unique_ptr<Screen> make_nodes(App& app);
 std::unique_ptr<Screen> make_map(App& app);
+// Has the device turned every way to find what its own magnets add to the
+// compass. on_done is called once that has been kept.
+std::unique_ptr<Screen> make_compass_calibration(App& app, std::function<void()> on_done = nullptr);
 std::unique_ptr<Screen> make_radio(App& app);
 std::unique_ptr<Screen> make_setup(App& app);
 std::unique_ptr<Screen> make_chat(App& app, const ChatKey& key);
@@ -123,6 +127,11 @@ bool region_supported(int region);
 bool repair_coding_rate(App& app);
 std::unique_ptr<Screen> make_channels(App& app);
 std::unique_ptr<Screen> make_help(App& app);
+// This device's addresses on the networks it is on (radio.cpp).
+std::vector<std::string> local_addresses();
+// How other apps reach the radio, Wi-Fi or Bluetooth, and the code shown while a phone pairs.
+std::unique_ptr<Screen> make_app_connection(App& app);
+std::unique_ptr<Screen> make_bluetooth_pairing(App& app);
 // Scrollable text ending in the credit line and a QR code for the link.
 std::unique_ptr<Screen> make_about_view(App& app, const std::string& title, const std::string& text,
                                         const std::string& link);

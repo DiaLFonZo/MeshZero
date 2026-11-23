@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -13,6 +14,7 @@
 #include "common/proto.h"
 #include "common/qr.h"
 #include "common/util.h"
+#include "common/wmm.h"
 
 using namespace mz;
 
@@ -103,6 +105,70 @@ static void test_util()
     const double b = geo_bearing_deg(52.0, 4.0, 52.0, 5.0);
     CHECK(b > 85 && b < 95);
     CHECK(std::string(compass_point(b)) == "E");
+    // A compass: the field points north and, here, 60 degrees into the ground.
+    {
+        const double ci = 0.5, si = std::sqrt(0.75);
+        const auto close = [](double a, double b) {
+            const double d = std::fabs(a - b);
+            return d < 0.01 || d > 359.99;
+        };
+        double h = -1;
+        // Flat on a table, top to the north; then to the east, where north is on the left.
+        const double flat[3] = {0, 0, 9.8};
+        const double to_north[3] = {0, ci, -si}, to_east[3] = {-ci, 0, -si}, to_west[3] = {ci, 0, -si};
+        CHECK(tilt_heading(to_north, flat, h) && close(h, 0));
+        CHECK(tilt_heading(to_east, flat, h) && close(h, 90));
+        CHECK(tilt_heading(to_west, flat, h) && close(h, 270));
+        // Top to the north and lifted by an angle t: the heading stays, also when held upright.
+        for (const double t : {0.5, 1.0, 1.4, M_PI / 2}) {
+            const double acc[3] = {0, std::sin(t), std::cos(t)};
+            const double mag[3] = {0, ci * std::cos(t) - si * std::sin(t), -ci * std::sin(t) - si * std::cos(t)};
+            CHECK(tilt_heading(mag, acc, h) && close(h, 0));
+        }
+        // Rolled onto its right edge by 0.6, top to the east.
+        const double roll = 0.6;
+        const double acc[3] = {-std::sin(roll), 0, std::cos(roll)};
+        const double mag[3] = {-ci * std::cos(roll) + si * std::sin(roll), 0, -ci * std::sin(roll) - si * std::cos(roll)};
+        CHECK(tilt_heading(mag, acc, h) && close(h, 90));
+        const double none[3] = {0, 0, 0}, straight_down[3] = {0, 0, -1};
+        CHECK(!tilt_heading(to_north, none, h));
+        CHECK(!tilt_heading(straight_down, flat, h));
+    }
+    // Magnetic declination, against the test values published with WMM2025.
+    CHECK(std::fabs(magnetic_declination(43, 93, 2025.0, 65) - 0.50) < 0.01);
+    CHECK(std::fabs(magnetic_declination(-33, 109, 2025.0, 51) - -5.49) < 0.01);
+    CHECK(std::fabs(magnetic_declination(-59, -8, 2025.0, 39) - -15.75) < 0.01);
+    CHECK(std::fabs(magnetic_declination(80, -96, 2025.0, 48) - -29.91) < 0.01);
+    // A date outside the model's five years is held at their end.
+    CHECK(magnetic_declination(47.6, -122.3, 2040.0) == magnetic_declination(47.6, -122.3, 2030.0));
+    CHECK(decimal_year() > 2025.0);
+    CHECK(distance_str(850) == "850m");
+    CHECK(distance_str(12345) == "12.3km");
+    CHECK(distance_str(500 * kFootM, true) == "500ft");
+    CHECK(distance_str(0.25 * kMileM, true) == "0.25mi");
+    CHECK(distance_str(2.5 * kMileM, true) == "2.5mi");
+    CHECK(distance_str(5 * kMileM, true) == "5mi");
+    CHECK(distance_str(12345, true) == "7.67mi");
+    CHECK(distance_str(250 * kMileM, true) == "250mi");
+    CHECK(altitude_str(152) == "152 m");
+    CHECK(altitude_str(152, true) == "499 ft");
+    CHECK(altitude_str(-3, true) == "-10 ft");
+
+    // Map tiles: the world is one tile at zoom 0, with 0,0 in its middle.
+    double x = 0, y = 0;
+    geo_to_world_px(0, 0, 0, x, y);
+    CHECK(std::fabs(x - 128) < 1e-6 && std::fabs(y - 128) < 1e-6);
+    // Amsterdam is in tile 8414/5384 at zoom 14.
+    geo_to_world_px(52.3731, 4.8922, 14, x, y);
+    CHECK(static_cast<int>(x) / kTilePx == 8414 && static_cast<int>(y) / kTilePx == 5384);
+    double lat = 0, lon = 0;
+    world_px_to_geo(x, y, 14, lat, lon);
+    CHECK(std::fabs(lat - 52.3731) < 1e-6 && std::fabs(lon - 4.8922) < 1e-6);
+    // The poles are off the map: they land on its edge instead of at infinity.
+    geo_to_world_px(90, 0, 3, x, y);
+    CHECK(std::fabs(y) < 1e-3);
+    CHECK(std::fabs(metres_per_px(0, 0) - 156543.03) < 0.01);
+    CHECK(std::fabs(metres_per_px(60, 1) - 39135.76) < 0.01);
 }
 
 static void test_battery()
@@ -235,6 +301,30 @@ static void test_history()
     rmdir(dir);
 }
 
+// Out-of-range ack states in a damaged log are read as "none", never cast blindly.
+static void test_history_bad_ack()
+{
+    char tmpl[] = "/tmp/mzhistXXXXXX";
+    const char* dir = mkdtemp(tmpl);
+    CHECK(dir != nullptr);
+    if (!dir) return;
+    const std::string path = std::string(dir) + "/messages.log";
+    if (FILE* f = fopen(path.c_str(), "w")) {
+        fputs("M\t1\t5\t1\t2\t0\t1\t0\t0\t0\t0\t200\tsent\n", f);  // outgoing, ack 200
+        fputs("M\t2\t6\t1\t2\t0\t1\t0\t0\t0\t0\t1\tpending\n", f);  // outgoing, pending
+        fputs("A\t6\t77\t0\n", f);                                   // bogus ack line
+        fclose(f);
+    }
+    const std::vector<StoredMsg> msgs = history_load(path);
+    CHECK(msgs.size() == 2);
+    if (msgs.size() == 2) {
+        CHECK(msgs[0].ack == AckState::None);
+        CHECK(msgs[1].ack == AckState::Pending);
+    }
+    unlink(path.c_str());
+    rmdir(dir);
+}
+
 static void test_qr()
 {
     // The link "https://meshtastic.org/e/#CgMSAQE" as a QR code, one character per module.
@@ -298,6 +388,45 @@ static void test_qr()
     qr_release();
 }
 
+static void test_find()
+{
+    CHECK(contains_nocase("Harbour Weather", "weather"));
+    CHECK(contains_nocase("Harbour Weather", "BOUR W"));
+    CHECK(contains_nocase("!a1b2c306", "C306"));
+    CHECK(contains_nocase("anything", ""));
+    CHECK(contains_nocase("", ""));
+    CHECK(!contains_nocase("Harbour", "harbours"));
+    CHECK(!contains_nocase("", "x"));
+    CHECK(!contains_nocase("Anna Rooftop", "roof top"));
+    // Only ASCII letters fold; other bytes must match as they are.
+    CHECK(contains_nocase("Gr\xC3\xBC\xC3\x9F" "e", "gr\xC3\xBC"));
+}
+
+// The alert bell is a control character inside the text; it has to still be
+// there after the message was written to the history and read back.
+static void test_history_bell()
+{
+    char tmpl[] = "/tmp/mzhistXXXXXX";
+    const char* dir = mkdtemp(tmpl);
+    CHECK(dir != nullptr);
+    if (!dir) return;
+    const std::string path = std::string(dir) + "/messages.log";
+    {
+        HistoryWriter w(path);
+        StoredMsg m;
+        m.ts   = 1000;
+        m.id   = 21;
+        m.from = 0xaabbccdd;
+        m.to   = kBroadcast;
+        m.text = "Storm warning\a";
+        w.append(m);
+    }
+    const std::vector<StoredMsg> msgs = history_load(path);
+    CHECK(msgs.size() == 1 && msgs[0].text == "Storm warning\a");
+    unlink(path.c_str());
+    rmdir(dir);
+}
+
 int main()
 {
     test_framing();
@@ -306,6 +435,9 @@ int main()
     test_util();
     test_battery();
     test_history();
+    test_history_bad_ack();
+    test_history_bell();
+    test_find();
     test_qr();
     if (failures == 0) printf("all tests passed\n");
     return failures == 0 ? 0 : 1;

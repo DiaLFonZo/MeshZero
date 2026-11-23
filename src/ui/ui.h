@@ -33,6 +33,19 @@ const std::vector<Accent>& accents();
 size_t accent_index();
 void set_accent(size_t index);
 
+// Whether distances and heights are shown in feet and miles instead of
+// metres and kilometres, wherever they are shown; the topographic map follows
+// it too. Saved for the next start.
+bool imperial();
+void set_imperial(bool on);
+
+// Which incoming messages make a sound. A message with an alert bell sounds
+// in both of the modes that are not Off. Saved for the next start.
+enum class Sounds { Off, Direct, All };
+Sounds sounds();
+void set_sounds(Sounds mode);
+const char* sounds_name(Sounds mode);
+
 const lv_font_t* font();
 const lv_font_t* font_small();
 
@@ -74,6 +87,7 @@ class ListView {
 public:
     ListView(lv_obj_t* parent, int x, int y, int w, int h);
     void set_prefix_width(int w) { prefix_w_ = w; }
+    void set_height(int h);
     void set_items(const std::vector<ListItem>& items);
     int selected() const { return selected_; }
     void select(int index);

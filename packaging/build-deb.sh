@@ -18,7 +18,8 @@ cmake -S . -B build/arm64 -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-aarch64.cmake \
     -DCMAKE_BUILD_TYPE=Release \
     -DMESHZERO_BUILD_TESTS=OFF \
-    -DMESHZERO_REQUIRE_RADIO=ON
+    -DMESHZERO_REQUIRE_RADIO=ON \
+    -DMESHZERO_REQUIRE_BLUETOOTH=ON
 cmake --build build/arm64
 (cd build/arm64 && cpack -G DEB)
 ls -l dist/*.deb

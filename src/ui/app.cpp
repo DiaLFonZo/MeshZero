@@ -5,6 +5,7 @@
 #include <ctime>
 
 #include "common/util.h"
+#include "ui/sound.h"
 #include "ui/update.h"
 
 namespace mz {
@@ -314,6 +315,12 @@ void App::update_chrome()
             const char* dir  = getenv("MESHZERO_POWER_SUPPLY_DIR");
             battery_         = dir && dir[0] ? battery_percent(charging_, dir) : battery_percent(charging_);
         }
+        // An app is using the radio from outside right now, and how.
+        if (mesh.bluetooth_conn > 0) {
+            status += LV_SYMBOL_BLUETOOTH " ";
+        } else if (mesh.network_conn > 0) {
+            status += LV_SYMBOL_WIFI " ";
+        }
         if (battery_ >= 0) status += (charging_ ? LV_SYMBOL_CHARGE : "") + std::to_string(battery_) + "% ";
         const time_t t = time(nullptr);
         tm local{};
@@ -340,9 +347,22 @@ void App::tick()
         UiEvent ev = std::move(mesh.events.front());
         mesh.events.pop_front();
         switch (ev.type) {
-            case UiEvent::NewMessage:
-                notify(LV_SYMBOL_ENVELOPE " " + ev.text);
+            case UiEvent::NewMessage: {
+                // A bell is meant to get through: it rings in a muted
+                // conversation too, and in the one on screen.
+                const bool muted       = mesh.muted(ev.chat);
+                const ui::Sounds mode  = ui::sounds();
+                if (ev.bell) {
+                    if (mode != ui::Sounds::Off) sound::play(sound::Kind::Alert);
+                    if (!ev.seen) notify(LV_SYMBOL_BELL " " + ev.text);
+                } else if (!muted) {
+                    if (mode == ui::Sounds::All || (mode == ui::Sounds::Direct && ev.chat.dm)) {
+                        sound::play(sound::Kind::Message);
+                    }
+                    notify(LV_SYMBOL_ENVELOPE " " + ev.text);
+                }
                 break;
+            }
             case UiEvent::Toast:
                 toast(ev.text);
                 break;
@@ -411,6 +431,11 @@ void App::tick()
                                   mesh.set_background(c == 0);
                                   toast("Your option can be changed in SETUP any time.");
                               }));
+        }
+        // A phone is pairing: show the code it asks for, whatever page is open.
+        if (mesh.bluetooth_key != pairing_shown_) {
+            pairing_shown_ = mesh.bluetooth_key;
+            if (!pairing_shown_.empty()) push(make_bluetooth_pairing(*this));
         }
         if (Screen* s = top()) s->refresh();
         update_chrome();

@@ -13,6 +13,9 @@ namespace {
 constexpr size_t kShownMessages = 60;
 constexpr int kInputH           = ui::kRowH + 1;
 constexpr int kNameW            = 42;  // fits a four-letter short name
+// How the official apps send an alert: a bell emoji in front, for the eye, and
+// the bell character behind, which is what makes the other side ring.
+constexpr char kBellEmoji[] = "\xF0\x9F\x94\x94";
 
 std::string time_str(uint32_t ts)
 {
@@ -53,7 +56,7 @@ public:
         lv_obj_align(empty_, LV_ALIGN_CENTER, 0, 0);
     }
     int tab() const override { return kTabChats; }
-    std::string hint() const override { return "Enter open   Tab next page   ? help   Hold Esc exit"; }
+    std::string hint() const override { return "Enter open   M mute   ? help   Hold Esc exit"; }
 
     void refresh() override
     {
@@ -94,17 +97,20 @@ public:
                 it.text += "  " + who + (last.is_tapback() ? "reacted " : "") + last.text;
             }
             it.text = ui::clean(it.text, true);
+            // A muted chat still counts what is new, without calling for attention.
+            const bool muted = mesh.muted(c->key);
             if (c->unread > 0) {
                 it.right           = std::to_string(c->unread) + " new";
-                it.has_right_color = true;
+                it.has_right_color = !muted;
                 it.right_color     = ui::c_accent();
                 it.has_color       = true;
-                it.color           = ui::c_text();
+                it.color           = muted ? ui::c_dim() : ui::c_text();
             } else {
                 it.right     = c->last_ts ? age_str(c->last_ts, now_s()) : "";
                 it.has_color = c->msgs.empty();
                 it.color     = ui::c_dim();
             }
+            if (muted) it.right = it.right.empty() ? LV_SYMBOL_MUTE : LV_SYMBOL_MUTE " " + it.right;
             items.push_back(std::move(it));
             keys_.push_back(c->key);
         };
@@ -142,6 +148,19 @@ public:
                 } else {
                     app.open_chat(keys_[i]);
                 }
+            }
+            return true;
+        }
+        if ((key.is_char('m') || key.is_char('M')) && i < keys_.size() && mesh.ever_ready()) {
+            const ChatKey k = keys_[i];
+            if (k.dm && k.id == 0) return true;  // "No direct messages"
+            const bool mute = !mesh.muted(k);
+            if (!mesh.ready()) {
+                app.toast("Radio offline", true);
+            } else if (!mesh.set_muted(k, mute)) {
+                app.toast("Can't mute " + mesh.chat_title(k) + ": the radio doesn't know this node", true);
+            } else {
+                app.toast(mesh.chat_title(k) + (mute ? " muted" : " unmuted"));
             }
             return true;
         }
@@ -322,6 +341,7 @@ public:
     {
         const size_t len = input_->text().size();
         if (selecting_) return "Enter react, reply...   Up/Down choose   Esc cancel";
+        if (bell_) return "Enter send with alert bell   Ctrl+G no bell";
         std::string h    = reply_id_ ? "Enter send reply   Esc cancel reply" : "Enter send   Up select   Tab emoji   Esc back";
         if (key_.dm && mesh.awaiting_key(key_.id)) h = "Waiting for pubkey   Enter send   Esc back";
         if (len > 0) h += "   " + std::to_string(len) + "/" + std::to_string(kMaxTextLen);
@@ -401,8 +421,16 @@ public:
                     actions();
                     return true;
                 }
-                const std::string text = trim(input_->text());
+                std::string text = trim(input_->text());
+                if (bell_ && !text.empty()) {
+                    text = std::string(kBellEmoji) + " " + text + "\a";
+                    if (text.size() > kMaxTextLen) {
+                        app.toast("Too long to send with the alert bell", true);
+                        return true;
+                    }
+                }
                 if (!text.empty() && mesh.send_text(key_, text, reply_id_)) {
+                    bell_ = false;
                     set_reply(0, "");
                     input_->set_text("");
                     refresh();
@@ -450,6 +478,11 @@ public:
                 set_reply(0, "");
                 return true;
             default:
+                // Ctrl+G is the bell character itself on any keyboard.
+                if (key.k == K::Char && key.ctrl && (key.ch == 'g' || key.ch == 'G')) {
+                    bell_ = !bell_;
+                    return true;
+                }
                 if (selecting_) end_selection();
                 return input_->handle_key(key);
         }
@@ -640,6 +673,7 @@ private:
                 line("Signal", sig);
             }
         }
+        if (has_bell(m.text)) line("Alert bell", "yes");
         if (m.reply_id) {
             const std::string quote = quote_of(c, m.reply_id);
             line("Reply to", quote.empty() ? "a message that is not in this chat" : quote);
@@ -729,6 +763,10 @@ private:
 
         std::string body = ui::clean(m.text);
         if (m.is_tapback()) body = "reacted " + body;
+        // A bell sent without its emoji would look like any other message.
+        if (!m.is_tapback() && has_bell(m.text) && m.text.find(kBellEmoji) == std::string::npos) {
+            body = LV_SYMBOL_BELL " " + body;
+        }
         if (m.outgoing && m.ack == AckState::Failed) {
             body += "\nNot delivered: " + delivery_error_text(m.ack_error);
         }
@@ -769,6 +807,7 @@ private:
     uint32_t sig_ = 0;
     bool built_   = false;
     std::vector<Row> rows_;   // the messages on screen, oldest first
+    bool bell_         = false;  // the message being written goes out with an alert bell
     bool selecting_    = false;  // a message is picked, to react to it
     int sel_           = 0;
     uint32_t sel_id_   = 0;

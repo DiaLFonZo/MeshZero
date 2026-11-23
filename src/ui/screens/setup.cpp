@@ -13,6 +13,8 @@
 #include "meshtastic/apponly.pb.h"
 #include "ui/camera.h"
 #include "ui/screens/editor.h"
+#include "ui/compass.h"
+#include "ui/tiles.h"
 #include "ui/update.h"
 
 namespace mz {
@@ -1915,19 +1917,11 @@ public:
                                        "the mesh. While it is on, other LoRa apps can't use the cap.",
                                        {"Off", "On"}, [m](int c) { m->set_background(c == 1); }));
               });
-        entry("Network Access (LAN)", mesh.network_access == 1 ? "on" : "off",
-              "Lets other devices on your local network use this radio through port 4403, for MeshMonitor or a phone "
-              "app. There's no password, so use it only on networks you trust.",
-              [a, m]() {
-                  if (m->network_access < 0) {
-                      a->toast("Radio offline", true);
-                      return;
-                  }
-                  a->push(make_confirm(*a, "Network Access (LAN)",
-                                       "Let other devices on your network use this radio, for MeshMonitor or a phone "
-                                       "app. There is no password.",
-                                       {"Off", "On"}, [m](int c) { m->set_network_access(c == 1); }));
-              });
+        entry("App connection",
+              mesh.app_connection() == Mesh::kAppWifi ? "Wi-Fi" : mesh.app_connection() == Mesh::kAppBluetooth ? "Bluetooth" : "off",
+              "How other apps use this radio: over Wi-Fi, for MeshMonitor, the meshtastic command or a phone app on "
+              "your network, or over Bluetooth, for a phone app when there is no Wi-Fi to share. One at a time.",
+              [a]() { a->push(make_app_connection(*a)); });
         header("Modules");
         entry("MQTT", mesh.modules.mqtt.enabled ? "on" : "off",
               "Connects the radio to an MQTT server over the internet, to link channels with other meshes and report "
@@ -1944,9 +1938,36 @@ public:
               open(page_store_forward));
         entry("Range test", mesh.modules.range_test.enabled ? "on" : "off",
               "Sends numbered test messages to find out how far your radio reaches.", open(page_range_test));
+        header("Notifications");
+        entry("Sounds", ui::sounds_name(ui::sounds()),
+              "Which new messages make a sound while MeshZero is open. A message sent with an alert bell rings "
+              "louder and longer, also in a muted chat, unless sounds are off. M on a chat in Chats mutes it. How "
+              "loud it is follows the device's volume.",
+              [a]() {
+                  a->push(make_picker(*a, "Sounds", {"Off", "Direct messages", "All messages"},
+                                      static_cast<int>(ui::sounds()), [](int i) {
+                                          if (i >= 0 && i <= 2) ui::set_sounds(static_cast<ui::Sounds>(i));
+                                      }));
+              });
         header("Appearance");
         entry("Accent color", ui::accents()[ui::accent_index()].name, "",
               [a]() { a->push(std::make_unique<AccentScreen>(*a)); });
+        entry("Units", ui::imperial() ? "Imperial" : "Metric",
+              "What distances and altitudes are shown in. Metric: metres and kilometres, and a topographic map with "
+              "heights in metres. Imperial: feet and miles, and a topographic map with heights in feet inside the "
+              "United States, where there is such a map; elsewhere its heights stay in metres. Radio settings keep "
+              "the units the radio works in.",
+              [a]() {
+                  a->push(make_picker(*a, "Units", {"Metric", "Imperial"}, ui::imperial() ? 1 : 0,
+                                      [](int i) { ui::set_imperial(i == 1); }));
+              });
+        if (compass::available()) {
+            entry("Compass", compass::calibrated() ? "calibrated" : "not calibrated",
+                  "The radar on the Map page can turn with the device, so that what is ahead of you is at the top: "
+                  "press H there. The compass has to be calibrated once, and again when it seems off, by turning "
+                  "the device every way.",
+                  [a]() { a->push(make_compass_calibration(*a)); });
+        }
         header("Maintenance");
         // Plain actions like this one need no explanation; ? does nothing on them.
         entry("Restart radio", "", "",
@@ -2012,6 +2033,21 @@ public:
                                        {"Back", on ? "Turn off update checks" : "Turn on update checks"},
                                        [on](int c) {
                                            if (c == 1) update::set_enabled(!on);
+                                       }));
+              });
+        entry("Map downloads", tiles::downloads() ? "on" : "off",
+              "The street and topographic maps are made of small pictures. With this on, the ones you look at are "
+              "downloaded from openstreetmap.org, opentopomap.org or the USGS, which tells them roughly where you "
+              "are looking, and kept for next time. Off, only maps already on the device are shown.",
+              [a]() {
+                  const bool on = tiles::downloads();
+                  a->push(make_confirm(*a, "Map downloads",
+                                       std::string(on ? "Missing map pictures are downloaded when you look at a map."
+                                                      : "Map downloads are turned off.") +
+                                           "\n\nMaps are kept in " + tiles::dir() + ".",
+                                       {"Back", on ? "Turn off map downloads" : "Turn on map downloads"},
+                                       [on](int c) {
+                                           if (c == 1) tiles::set_downloads(!on);
                                        }));
               });
         entry("Help", "", "",
