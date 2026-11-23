@@ -216,6 +216,11 @@ void Mesh::set_background(bool on)
     send_control(on ? "bg=1" : "bg=0");
 }
 
+void Mesh::forget_bluetooth_phones()
+{
+    send_control("btforget");
+}
+
 int Mesh::app_connection() const
 {
     if (network_access < 0) return -1;
@@ -526,6 +531,14 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
             bluetooth_why = text.substr(9);
         } else if (text.rfind("mz:btkey=", 0) == 0) {
             bluetooth_key = text.substr(9);
+        } else if (text.rfind("mz:btconn=", 0) == 0) {
+            bluetooth_conn = atoi(text.c_str() + 10);
+        } else if (text.rfind("mz:btpaired=", 0) == 0) {
+            bluetooth_paired = atoi(text.c_str() + 12);
+        } else if (text.rfind("mz:btpeer=", 0) == 0) {
+            bluetooth_peer = text.substr(10);
+        } else if (text.rfind("mz:netconn=", 0) == 0) {
+            network_conn = atoi(text.c_str() + 11);
         } else if (text.rfind("mz:bt=", 0) == 0) {
             bluetooth = atoi(text.c_str() + 6);
         }
@@ -669,6 +682,13 @@ void Mesh::on_text(const meshtastic_MeshPacket& p)
         key = ChatKey{true, m.outgoing ? p.to : p.from};
     }
     const bool incoming = !m.outgoing;
+    // Sent from a phone or another app on this radio: its acknowledgement
+    // comes past here too, so it gets a delivery status like our own.
+    if (m.outgoing && p.want_ack && p.id != 0) {
+        m.ack               = AckState::Pending;
+        pending_acks_[p.id] = key;
+        if (pending_acks_.size() > 256) pending_acks_.erase(pending_acks_.begin());
+    }
     add_message(key, std::move(m), true);
 
     // A sender we have no name for, or no key to answer a direct message with.

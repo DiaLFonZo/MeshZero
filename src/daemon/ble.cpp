@@ -472,6 +472,79 @@ bool Ble::supported()
     return true;
 }
 
+std::vector<Ble::Device> Ble::devices()
+{
+    std::vector<Device> out;
+    sd_bus* bus = nullptr;
+    if (sd_bus_open_system(&bus) < 0) return out;
+    sd_bus_message* reply = nullptr;
+    sd_bus_error error    = SD_BUS_ERROR_NULL;
+    int r = sd_bus_call_method(bus, kBluez, "/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", &error, &reply,
+                               "");
+    // Every object with its interfaces and their properties: a{oa{sa{sv}}}.
+    if (r >= 0) r = sd_bus_message_enter_container(reply, 'a', "{oa{sa{sv}}}");
+    while (r >= 0 && sd_bus_message_enter_container(reply, 'e', "oa{sa{sv}}") > 0) {
+        const char* path = nullptr;
+        if (sd_bus_message_read(reply, "o", &path) < 0) break;
+        Device d;
+        d.path      = path;
+        bool device = false;
+        if (sd_bus_message_enter_container(reply, 'a', "{sa{sv}}") < 0) break;
+        while (sd_bus_message_enter_container(reply, 'e', "sa{sv}") > 0) {
+            const char* iface = nullptr;
+            if (sd_bus_message_read(reply, "s", &iface) < 0) break;
+            if (strcmp(iface, "org.bluez.Device1") != 0) {
+                sd_bus_message_skip(reply, "a{sv}");
+            } else {
+                device = true;
+                sd_bus_message_enter_container(reply, 'a', "{sv}");
+                while (sd_bus_message_enter_container(reply, 'e', "sv") > 0) {
+                    const char* key  = nullptr;
+                    const char* text = nullptr;
+                    int flag         = 0;
+                    if (sd_bus_message_read(reply, "s", &key) < 0) break;
+                    if (strcmp(key, "Address") == 0 && sd_bus_message_read(reply, "v", "s", &text) >= 0) {
+                        d.address = text;
+                    } else if (strcmp(key, "Alias") == 0 && sd_bus_message_read(reply, "v", "s", &text) >= 0) {
+                        d.name = text;
+                    } else if (strcmp(key, "Paired") == 0 && sd_bus_message_read(reply, "v", "b", &flag) >= 0) {
+                        d.paired = flag != 0;
+                    } else if (strcmp(key, "Connected") == 0 && sd_bus_message_read(reply, "v", "b", &flag) >= 0) {
+                        d.connected = flag != 0;
+                    } else if (strcmp(key, "Address") != 0 && strcmp(key, "Alias") != 0 && strcmp(key, "Paired") != 0 &&
+                               strcmp(key, "Connected") != 0) {
+                        sd_bus_message_skip(reply, "v");
+                    }
+                    sd_bus_message_exit_container(reply);
+                }
+                sd_bus_message_exit_container(reply);
+            }
+            sd_bus_message_exit_container(reply);
+        }
+        sd_bus_message_exit_container(reply);
+        sd_bus_message_exit_container(reply);
+        if (device) out.push_back(std::move(d));
+    }
+    sd_bus_error_free(&error);
+    sd_bus_message_unref(reply);
+    sd_bus_flush_close_unref(bus);
+    return out;
+}
+
+bool Ble::remove_device(const std::string& path)
+{
+    const size_t slash = path.rfind('/');
+    if (slash == std::string::npos || slash == 0) return false;
+    sd_bus* bus = nullptr;
+    if (sd_bus_open_system(&bus) < 0) return false;
+    sd_bus_error error = SD_BUS_ERROR_NULL;
+    const int r = sd_bus_call_method(bus, kBluez, path.substr(0, slash).c_str(), "org.bluez.Adapter1", "RemoveDevice",
+                                     &error, nullptr, "o", path.c_str());
+    sd_bus_error_free(&error);
+    sd_bus_flush_close_unref(bus);
+    return r >= 0;
+}
+
 bool Ble::start(const std::string& name, bool pin, Handlers handlers)
 {
     stop();
@@ -628,6 +701,14 @@ struct Ble::Impl {
 Ble::Ble() : impl_(std::make_unique<Impl>()) {}
 Ble::~Ble() = default;
 bool Ble::supported()
+{
+    return false;
+}
+std::vector<Ble::Device> Ble::devices()
+{
+    return {};
+}
+bool Ble::remove_device(const std::string&)
 {
     return false;
 }

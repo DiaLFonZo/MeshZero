@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace mz {
 
@@ -34,6 +35,18 @@ public:
 
     // Whether this build can do Bluetooth at all.
     static bool supported();
+
+    // A device the system's Bluetooth daemon knows, phone or otherwise.
+    struct Device {
+        std::string path;     // what the daemon calls it, as in on_write
+        std::string address;  // its own address once paired, which stays the same
+        std::string name;
+        bool paired    = false;
+        bool connected = false;
+    };
+    static std::vector<Device> devices();
+    // Makes the Bluetooth daemon forget a device, its pairing included.
+    static bool remove_device(const std::string& path);
 
     // Starts offering the service under this name. With `pin`, a phone has to
     // pair with a code shown here before it can use it. False when the

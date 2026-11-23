@@ -12,6 +12,8 @@ needed to download the map tiles today.
 - **Alert bell:** Ctrl+G while writing sends a message that rings on the other side. Incoming ones ring here too, even in a muted chat.
 - **Telemetry:** A node's page now shows what its sensors send: Environment, Power and Air quality. Request telemetry lets you pick which.
 
+- **Delivery status for messages sent from a phone:** A message sent from a phone app through the Cardputer now shows its tick here too.
+
 **Enhanced**
 - **Node List:** Now has more filter options, searching, and sorting to be more useful for those in really busy areas trying to find a needle in a haystack of nodes. V filters, / searches by name or ID.
 

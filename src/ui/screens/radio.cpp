@@ -79,7 +79,9 @@ public:
                 break;
         }
         if (mesh.app_connection() == Mesh::kAppBluetooth) {
-            row("App connection", "Bluetooth, " + (mesh.bluetooth_name.empty() ? std::string("starting") : mesh.bluetooth_name),
+            row("App connection",
+                mesh.bluetooth_conn > 0 ? "Bluetooth, " + (mesh.bluetooth_peer.empty() ? std::string("connected") : mesh.bluetooth_peer)
+                                        : "Bluetooth, " + (mesh.bluetooth_name.empty() ? std::string("starting") : mesh.bluetooth_name),
                 !mesh.bluetooth_ok);
         } else if (mesh.app_connection() != Mesh::kAppWifi) {
             row("App connection", "off");

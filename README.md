@@ -141,7 +141,11 @@ phone app (not in the phone's own Bluetooth settings). Wi-Fi and Bluetooth are
 not on at the same time: choosing one turns the other off. The device shows up
 as your short name and four digits, like `MZ01_1a2b`. The first time,
 a six-digit code appears on the Cardputer to type on the phone, so keep
-MeshZero open for that. After pairing, the phone connects by itself.
+MeshZero open for that. After pairing, the phone connects by itself, and a
+Bluetooth icon shows in the top bar while it is connected.
+
+To unpair, use "Forget the paired phone" on the same page, and forget the
+device in the phone's Bluetooth settings too.
 
 Pairing can be set to "No PIN". Then any phone nearby can connect and change
 the radio's settings, so use it with care.

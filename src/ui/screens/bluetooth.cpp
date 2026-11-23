@@ -33,17 +33,33 @@ public:
         const int mode = mesh.app_connection();
         row("Connection", mode == Mesh::kAppWifi ? "Wi-Fi" : mode == Mesh::kAppBluetooth ? "Bluetooth (early access)" : "off",
             true);
-        pairing_row_ = -1;
+        pairing_row_ = forget_row_ = -1;
         if (mode == Mesh::kAppWifi) {
             const std::vector<std::string> addrs = local_addresses();
             if (addrs.empty()) row("Address", "no network", false);
             for (const auto& a : addrs) row("Address", a + ":4403", false);
+            row("Status", mesh.network_conn > 0 ? std::to_string(mesh.network_conn) + " connected" : "nothing connected",
+                false);
         } else if (mode == Mesh::kAppBluetooth) {
             pairing_row_ = static_cast<int>(items.size());
             row("Pairing", mesh.bluetooth_pin == 0 ? "no PIN" : "code on this screen", true);
             row("Name", mesh.bluetooth_name.empty() ? "-" : mesh.bluetooth_name, false);
-            row("Status", mesh.bluetooth_ok ? "phones can find it" : mesh.bluetooth_why.empty() ? "starting" : "not working",
-                false);
+            std::string status = mesh.bluetooth_why.empty() ? "starting" : "not working";
+            if (mesh.bluetooth_conn > 0) {
+                status = mesh.bluetooth_paired > 0 ? "paired, connected" : "connected";
+            } else if (mesh.bluetooth_ok) {
+                status = mesh.bluetooth_paired > 0 ? "paired, not connected" : "ready to pair";
+            }
+            row("Status", status, false);
+            if (mesh.bluetooth_conn > 0 && !mesh.bluetooth_peer.empty()) row("Phone", mesh.bluetooth_peer, false);
+            if (mesh.bluetooth_paired > 0) {
+                forget_row_ = static_cast<int>(items.size());
+                ui::ListItem it;
+                it.text      = mesh.bluetooth_paired == 1 ? "Forget the paired phone" : "Forget the paired phones";
+                it.has_color = true;
+                it.color     = ui::c_accent();
+                items.push_back(std::move(it));
+            }
         }
         list_->set_items(items);
     }
@@ -87,6 +103,15 @@ public:
                 m->set_app_connection(choice);
                 if (choice == Mesh::kAppBluetooth) a->toast("Look for this device in the Meshtastic phone app");
             }));
+        } else if (i == forget_row_) {
+            app.push(make_confirm(app, "Forget paired phones",
+                                  "The phone will have to pair again with a new code. On the phone, forget this "
+                                  "device too (in its Bluetooth settings), or it won't be able to connect.",
+                                  {"Cancel", "Forget"}, [m, a](int choice) {
+                                      if (choice != 1) return;
+                                      m->forget_bluetooth_phones();
+                                      a->toast("Pairing forgotten. Forget this device on the phone too.");
+                                  }));
         } else if (i == pairing_row_) {
             app.push(make_picker(app, "Pairing", {"Code on this screen", "No PIN"}, mesh.bluetooth_pin == 0 ? 1 : 0,
                                  [m](int choice) {
@@ -99,6 +124,7 @@ public:
 private:
     std::unique_ptr<ui::ListView> list_;
     int pairing_row_ = -1;
+    int forget_row_  = -1;
 };
 
 // Shown while a phone is pairing; goes away by itself once that is over.

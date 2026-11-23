@@ -224,6 +224,59 @@ std::string bluetooth_name_path()
     return history_dir() + "/bluetooth-name";
 }
 
+// The addresses of the phones that have used the service over Bluetooth, one
+// per line: forgetting pairings is about these, not about a headset the
+// device is paired with for something else.
+std::string bluetooth_phones_path()
+{
+    return history_dir() + "/bluetooth-phones";
+}
+
+std::vector<std::string> read_phones()
+{
+    std::vector<std::string> out;
+    if (FILE* f = fopen(bluetooth_phones_path().c_str(), "r")) {
+        char buf[64];
+        while (fgets(buf, sizeof(buf), f)) {
+            const std::string line = trim(buf);
+            if (!line.empty()) out.push_back(line);
+        }
+        fclose(f);
+    }
+    return out;
+}
+
+bool write_phones(const std::vector<std::string>& phones)
+{
+    FILE* f = fopen(bluetooth_phones_path().c_str(), "w");
+    if (!f) return false;
+    for (const std::string& p : phones) fprintf(f, "%s\n", p.c_str());
+    return fclose(f) == 0;
+}
+
+// The phones among the devices the Bluetooth daemon has a pairing with.
+std::vector<Ble::Device> paired_phones()
+{
+    const std::vector<std::string> known = read_phones();
+    std::vector<Ble::Device> out;
+    for (Ble::Device& d : Ble::devices()) {
+        if (d.paired && std::find(known.begin(), known.end(), d.address) != known.end()) out.push_back(std::move(d));
+    }
+    return out;
+}
+
+// Forgets the pairing with every phone; returns how many there were. Each
+// phone has to forget this device too before it can pair again.
+int forget_phones()
+{
+    int count = 0;
+    for (const Ble::Device& d : paired_phones()) {
+        if (Ble::remove_device(d.path)) ++count;
+    }
+    write_phones({});
+    return count;
+}
+
 bool read_flag(const std::string& path, bool fallback)
 {
     FILE* f = fopen(path.c_str(), "r");
@@ -327,6 +380,7 @@ private:
     Client& ble_client(const std::string& device);
     void send_control_line(Client& c, const std::string& setting);
     void tell_control_clients();
+    void watch_apps();
     void start_radio();
     void stop_radio(const char* why);
     void reap_radio();
@@ -384,6 +438,12 @@ private:
     std::string bt_started_name_;
     std::string bt_passkey_;
     std::string bt_why_;
+    // Who is using the radio from outside, for the app to show.
+    bool apps_dirty_  = true;   // connections or pairings may have changed
+    int bt_clients_   = 0;      // phones connected over Bluetooth
+    int bt_paired_    = 0;      // phones paired
+    int net_clients_  = 0;      // clients connected from other devices
+    std::string bt_peer_;       // the name of a connected phone
 
     std::vector<std::unique_ptr<Client>> clients_;
     HistoryWriter history_;
@@ -681,6 +741,7 @@ void Proxy::accept_client(int listen_fd)
         logf("client connected: %s", c->peer.c_str());
         const bool radio_down = upstream_fd_ < 0 || upstream_connecting_;
         clients_.push_back(std::move(c));
+        apps_dirty_ = true;
         if (radio_down) watch_radio(true);
     }
 }
@@ -1033,7 +1094,9 @@ void Proxy::send_control(Client& c)
           std::string("bgask=") + (exists(background_ask_path()) ? "1" : "0"),
           std::string("bt=") + (!Ble::supported() ? "-1" : bt_enabled_ ? "1" : "0"),
           std::string("btpin=") + (bt_pin_ ? "1" : "0"), "btname=" + bt_name_,
-          std::string("btok=") + (ble_.advertising() ? "1" : "0"), "btwhy=" + bt_why_, "btkey=" + bt_passkey_}) {
+          std::string("btok=") + (ble_.advertising() ? "1" : "0"), "btwhy=" + bt_why_, "btkey=" + bt_passkey_,
+          "btconn=" + std::to_string(bt_clients_), "btpaired=" + std::to_string(bt_paired_), "btpeer=" + bt_peer_,
+          "netconn=" + std::to_string(net_clients_)}) {
         send_control_line(c, setting);
     }
 }
@@ -1046,6 +1109,44 @@ void Proxy::tell_control_clients()
 }
 
 // ---------------------------------------------------------------- bluetooth
+
+// Works out who is connected and paired after something changed, and tells
+// the app when that is different from what it was last told.
+void Proxy::watch_apps()
+{
+    if (!apps_dirty_) return;
+    apps_dirty_ = false;
+    int bt = 0, net = 0, paired = 0;
+    std::string peer;
+    std::vector<std::string> phones = read_phones();
+    const size_t known              = phones.size();
+    std::vector<Ble::Device> devices;
+    if (bt_enabled_) devices = Ble::devices();
+    for (auto& c : clients_) {
+        if (c->closing) continue;
+        if (c->ble.empty()) {
+            if (!c->local) ++net;
+            continue;
+        }
+        ++bt;
+        for (const Ble::Device& d : devices) {
+            if (d.path != c->ble) continue;
+            if (peer.empty()) peer = d.name;
+            // Remember the phone, so that its pairing can be told from others.
+            if (d.paired && std::find(phones.begin(), phones.end(), d.address) == phones.end()) phones.push_back(d.address);
+        }
+    }
+    if (phones.size() != known) write_phones(phones);
+    for (const Ble::Device& d : devices) {
+        if (d.paired && std::find(phones.begin(), phones.end(), d.address) != phones.end()) ++paired;
+    }
+    if (bt == bt_clients_ && net == net_clients_ && paired == bt_paired_ && peer == bt_peer_) return;
+    bt_clients_  = bt;
+    net_clients_ = net;
+    bt_paired_   = paired;
+    bt_peer_     = peer;
+    tell_control_clients();
+}
 
 // What a radio with Bluetooth of its own calls itself: the short name and the
 // last four digits of the node number.
@@ -1083,6 +1184,7 @@ Client& Proxy::ble_client(const std::string& device)
     logf("client connected: %s", c->peer.c_str());
     const bool radio_down = upstream_fd_ < 0 || upstream_connecting_;
     clients_.push_back(std::move(c));
+    apps_dirty_ = true;
     if (radio_down) watch_radio(true);
     return *clients_.back();
 }
@@ -1129,6 +1231,7 @@ void Proxy::watch_bluetooth()
         h.on_passkey = [this](const std::string& passkey) {
             // The code itself stays out of the log.
             bt_passkey_ = passkey;
+            apps_dirty_ = true;
             logf(passkey.empty() ? "bluetooth pairing over" : "bluetooth pairing: showing the code in the app");
             for (auto& c : clients_) {
                 if (c->wants_control) send_control_line(*c, "btkey=" + bt_passkey_);
@@ -1174,7 +1277,17 @@ void Proxy::on_control(Client& c, const std::string& request)
             return;
         }
     }
+    if (request == "btforget") {
+        const int count = forget_phones();
+        logf("bluetooth: forgot the pairing with %d phone%s", count, count == 1 ? "" : "s");
+        for (auto& other : clients_) {
+            if (!other->ble.empty()) other->closing = true;
+        }
+        apps_dirty_ = true;
+        return;
+    }
     if (request == "bt=1" || request == "bt=0" || request == "btpin=1" || request == "btpin=0") {
+        apps_dirty_ = true;
         const bool on = request.back() == '1';
         const bool pin = request[2] == 'p';
         const std::string path = pin ? bluetooth_pin_path() : bluetooth_path();
@@ -1317,6 +1430,7 @@ void Proxy::run()
             bt_pin_     = read_flag(bluetooth_pin_path(), true);
             watch_bluetooth();
         }
+        watch_apps();
         if (now - last_radio_watch_ms_ > (radio_status_ == "nocap" || (radio_pid_ > 0 && radio_stop_ms_ == 0 && background_) ? 5000 : 1000)) {
             last_radio_watch_ms_ = now;
             watch_radio(false);
@@ -1410,6 +1524,7 @@ void Proxy::run()
                 logf("client disconnected: %s", c.peer.c_str());
                 if (!c.ble.empty() && !c.ble_gone) ble_.disconnect(c.ble);
                 if (c.fd >= 0) close(c.fd);
+                apps_dirty_ = true;
                 it = clients_.erase(it);
             } else {
                 ++it;
@@ -1440,7 +1555,9 @@ void usage()
             "  meshzerod hw present            exit 1 when no LoRa cap is attached\n"
             "  meshzerod background on|off|status keep the radio running when no app is using it (off by\n"
             "                                  default; while on, other apps cannot use the LoRa cap)\n"
-            "  meshzerod bluetooth on|off|status let phones use the radio over Bluetooth (early access)\n"
+            "  meshzerod bluetooth on|off|status|forget\n"
+            "                                  let phones use the radio over Bluetooth (early access);\n"
+            "                                  forget drops the pairing with every phone\n"
             "  meshzerod doctor                check that everything the radio needs is present\n\n"
             "Environment: MESHZERO_API_BIND, MESHZERO_API_PORT, MESHZERO_RADIO_PORT, MESHZERO_STATE_DIR\n");
 }
@@ -1508,12 +1625,21 @@ int main(int argc, char** argv)
             if (action == "on" && read_network_access() && write_network_access(false)) {
                 printf("Network access: turned off, as only one of the two is on at a time\n");
             }
+            if (action == "forget") {
+                const int count = forget_phones();
+                printf("Forgot the pairing with %d phone%s. Forget this device on the phone too before pairing again.\n",
+                       count, count == 1 ? "" : "s");
+                return 0;
+            }
             const std::string name = read_line(bluetooth_name_path());
             printf("Bluetooth: %s\n", !read_flag(bluetooth_path(), false) ? "off"
                                        : read_flag(bluetooth_pin_path(), true)
                                              ? "on, phones pair with a code shown in the app"
                                              : "on, no PIN: any phone nearby can connect");
             if (!name.empty()) printf("Name: %s\n", name.c_str());
+            for (const Ble::Device& d : paired_phones()) {
+                printf("Paired phone: %s (%s)%s\n", d.name.c_str(), d.address.c_str(), d.connected ? ", connected" : "");
+            }
             return 0;
         }
         if (cmd == "doctor") return hw_doctor(radio_port, listen_port);

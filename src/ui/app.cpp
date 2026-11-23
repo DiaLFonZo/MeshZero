@@ -315,6 +315,12 @@ void App::update_chrome()
             const char* dir  = getenv("MESHZERO_POWER_SUPPLY_DIR");
             battery_         = dir && dir[0] ? battery_percent(charging_, dir) : battery_percent(charging_);
         }
+        // An app is using the radio from outside right now, and how.
+        if (mesh.bluetooth_conn > 0) {
+            status += LV_SYMBOL_BLUETOOTH " ";
+        } else if (mesh.network_conn > 0) {
+            status += LV_SYMBOL_WIFI " ";
+        }
         if (battery_ >= 0) status += (charging_ ? LV_SYMBOL_CHARGE : "") + std::to_string(battery_) + "% ";
         const time_t t = time(nullptr);
         tm local{};

@@ -211,7 +211,14 @@ public:
     std::string bluetooth_name;
     std::string bluetooth_why;    // why it is not working, when it is not
     std::string bluetooth_key;    // the code to type on a phone that is pairing
+    int bluetooth_conn   = 0;     // phones connected over Bluetooth right now
+    int bluetooth_paired = 0;     // phones paired
+    std::string bluetooth_peer;   // the name of a connected phone
+    int network_conn     = 0;     // apps connected from other devices over the network
     void set_bluetooth_pin(bool on);
+    // Drops the pairing with every phone. Each phone has to forget this
+    // device as well before it can pair again.
+    void forget_bluetooth_phones();
     // How other apps reach this radio; one way at a time, which the service
     // sees to. -1 while it is not known yet.
     enum AppConnection { kAppOff = 0, kAppWifi = 1, kAppBluetooth = 2 };
