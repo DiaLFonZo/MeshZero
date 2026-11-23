@@ -1917,23 +1917,11 @@ public:
                                        "the mesh. While it is on, other LoRa apps can't use the cap.",
                                        {"Off", "On"}, [m](int c) { m->set_background(c == 1); }));
               });
-        entry("Network Access (LAN)", mesh.network_access == 1 ? "on" : "off",
-              "Lets other devices on your local network use this radio through port 4403, for MeshMonitor or a phone "
-              "app. There's no password, so use it only on networks you trust.",
-              [a, m]() {
-                  if (m->network_access < 0) {
-                      a->toast("Radio offline", true);
-                      return;
-                  }
-                  a->push(make_confirm(*a, "Network Access (LAN)",
-                                       "Let other devices on your network use this radio, for MeshMonitor or a phone "
-                                       "app. There is no password.",
-                                       {"Off", "On"}, [m](int c) { m->set_network_access(c == 1); }));
-              });
-        entry("Bluetooth", mesh.bluetooth == 1 ? "on, early access" : "early access",
-              "Lets the Meshtastic phone apps use this radio over Bluetooth, for when there is no Wi-Fi to share. "
-              "Early access: it has seen little testing with the phone apps so far.",
-              [a]() { a->push(make_bluetooth(*a)); });
+        entry("App connection",
+              mesh.app_connection() == Mesh::kAppWifi ? "Wi-Fi" : mesh.app_connection() == Mesh::kAppBluetooth ? "Bluetooth" : "off",
+              "How other apps use this radio: over Wi-Fi, for MeshMonitor, the meshtastic command or a phone app on "
+              "your network, or over Bluetooth, for a phone app when there is no Wi-Fi to share. One at a time.",
+              [a]() { a->push(make_app_connection(*a)); });
         header("Modules");
         entry("MQTT", mesh.modules.mqtt.enabled ? "on" : "off",
               "Connects the radio to an MQTT server over the internet, to link channels with other meshes and report "

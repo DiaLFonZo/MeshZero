@@ -127,8 +127,10 @@ bool region_supported(int region);
 bool repair_coding_rate(App& app);
 std::unique_ptr<Screen> make_channels(App& app);
 std::unique_ptr<Screen> make_help(App& app);
-// Bluetooth for the phone apps: its settings, and the code shown while a phone pairs.
-std::unique_ptr<Screen> make_bluetooth(App& app);
+// This device's addresses on the networks it is on (radio.cpp).
+std::vector<std::string> local_addresses();
+// How other apps reach the radio, Wi-Fi or Bluetooth, and the code shown while a phone pairs.
+std::unique_ptr<Screen> make_app_connection(App& app);
 std::unique_ptr<Screen> make_bluetooth_pairing(App& app);
 // Scrollable text ending in the credit line and a QR code for the link.
 std::unique_ptr<Screen> make_about_view(App& app, const std::string& title, const std::string& text,

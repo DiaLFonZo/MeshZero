@@ -288,7 +288,7 @@ public:
     void set_network_access(bool on) { net_access_ = on; }
     void load_bluetooth()
     {
-        bt_enabled_ = read_flag(bluetooth_path(), false);
+        bt_enabled_ = read_flag(bluetooth_path(), false) && !net_access_;
         bt_pin_     = read_flag(bluetooth_pin_path(), true);
         bt_name_    = read_line(bluetooth_name_path());
     }
@@ -1162,6 +1162,12 @@ void Proxy::on_control(Client& c, const std::string& request)
     }
     if (request == "net=1" || request == "net=0") {
         const bool on = request == "net=1";
+        // Other apps come in over the network or over Bluetooth, not both.
+        if (on && bt_enabled_) {
+            write_flag(bluetooth_path(), false);
+            bt_enabled_ = false;
+            watch_bluetooth();
+        }
         if (!write_network_access(on)) logf("cannot save %s: %s", access_path().c_str(), strerror(errno));
         if (on != net_access_) {
             apply_network_access(on);  // tells every client that asked, this one included
@@ -1174,6 +1180,10 @@ void Proxy::on_control(Client& c, const std::string& request)
         const std::string path = pin ? bluetooth_pin_path() : bluetooth_path();
         if (!write_flag(path, on)) logf("cannot save %s: %s", path.c_str(), strerror(errno));
         (pin ? bt_pin_ : bt_enabled_) = on;
+        if (!pin && on) {
+            write_network_access(false);
+            apply_network_access(false);
+        }
         watch_bluetooth();
         for (auto& other : clients_) {
             if (other->wants_control && other.get() != &c) send_control(*other);
@@ -1302,7 +1312,8 @@ void Proxy::run()
             background_ = read_background();
             if (listen_fds_.empty()) start_listening();
             // 'meshzerod bluetooth on|off' does the same for Bluetooth.
-            bt_enabled_ = read_flag(bluetooth_path(), false);
+            // With both switched on, as only editing the files can do, the network stays.
+            bt_enabled_ = read_flag(bluetooth_path(), false) && !net_access_;
             bt_pin_     = read_flag(bluetooth_pin_path(), true);
             watch_bluetooth();
         }
@@ -1476,6 +1487,9 @@ int main(int argc, char** argv)
                         access_path().c_str(), strerror(errno), action.c_str());
                 return 1;
             }
+            if (action == "on" && read_flag(bluetooth_path(), false) && write_flag(bluetooth_path(), false)) {
+                printf("Bluetooth: turned off, as only one of the two is on at a time\n");
+            }
             printf("Network access: %s\n", read_network_access() ? "on" : "off (this device only)");
             return 0;
         }
@@ -1490,6 +1504,9 @@ int main(int argc, char** argv)
                 fprintf(stderr, "cannot write %s: %s\nRun it as the service user: sudo -u meshzero meshzerod bluetooth %s\n",
                         bluetooth_path().c_str(), strerror(errno), action.c_str());
                 return 1;
+            }
+            if (action == "on" && read_network_access() && write_network_access(false)) {
+                printf("Network access: turned off, as only one of the two is on at a time\n");
             }
             const std::string name = read_line(bluetooth_name_path());
             printf("Bluetooth: %s\n", !read_flag(bluetooth_path(), false) ? "off"

@@ -6,7 +6,7 @@ Since we've been relatively low on bugs, I was able to focus on bringing robust 
 **Added**
 - **Enhanced Map Support:** Topographic and terrain maps are now available on device. No API keys are 
 needed to download the map tiles today.
-- **Basic Bluetooth Support:** An early access implementation for bluetooth. Tested on iOS and Android, but may be buggy. Please report any issues. Turn it on under Setup > Bluetooth, then pick the device in the phone app.
+- **Basic Bluetooth Support:** An early access implementation for bluetooth. Tested on iOS and Android, but may be buggy. Please report any issues. Set Setup > App connection to Bluetooth, then pick the device in the Meshtastic phone app.
 - **Alert Sounds:** Sounds will let you know when messages arrive. Setup > Sounds picks all messages, direct messages only, or off.
 - **Mute:** M on a chat mutes it. The radio remembers it, so the phone apps see the same.
 - **Alert bell:** Ctrl+G while writing sends a message that rings on the other side. Incoming ones ring here too, even in a muted chat.
@@ -14,6 +14,9 @@ needed to download the map tiles today.
 
 **Enhanced**
 - **Node List:** Now has more filter options, searching, and sorting to be more useful for those in really busy areas trying to find a needle in a haystack of nodes. V filters, / searches by name or ID.
+
+**Changed**
+- **App connection:** "Network Access (LAN)" is now Setup > App connection, where you pick Off, Wi-Fi or Bluetooth. Only one is on at a time.
 
 **Fixed**
 

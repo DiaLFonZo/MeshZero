@@ -42,8 +42,8 @@ other mesh networking technologies.
   share by QR), custom modem settings, node name and role, position,
   power, network, security, MQTT, telemetry and a few other modules.
 - The Meshtastic TCP API on port 4403, for MeshMonitor, the `meshtastic` CLI
-  or the phone apps over Wi-Fi. Enable that in settings.
-- Bluetooth for the phone apps (early access), for when there is no Wi-Fi.
+  or the phone apps over Wi-Fi, or Bluetooth for the phone apps (early
+  access) when there is no Wi-Fi. Setup > App connection picks one.
 - Supports the new and old model Cap Lora 1262 modules.
 - Community Configs allow meshtastic groups/regions around the world to submit their
   preferred radio and channel configurations for easy setup.
@@ -122,7 +122,7 @@ cap and the GPS, so other apps can't use them.
 
 ## Using it from other software
 
-Turn on Setup > Network Access (LAN) first. It is off by default. The Radio page
+Set Setup > App connection to Wi-Fi first. It is off by default. The Radio page
 then shows the device's IP address. Point a Meshtastic TCP client at it on
 port 4403:
 
@@ -132,13 +132,14 @@ meshtastic --host 192.168.1.50 --info
 
 For MeshMonitor, set `MESHTASTIC_NODE_IP` to that address.
 The API has no authentication, same as any Meshtastic node with networking
-turned on, so while network access is on anyone on your network can use the
-radio.
+turned on, so while it is on anyone on your network can use the radio.
 
 ## Bluetooth (early access)
 
-Turn on Setup > Bluetooth and pick the device in the Meshtastic phone app. It
-shows up as your short name and four digits, like `MZ01_1a2b`. The first time,
+Set Setup > App connection to Bluetooth and pick the device in the Meshtastic
+phone app (not in the phone's own Bluetooth settings). Wi-Fi and Bluetooth are
+not on at the same time: choosing one turns the other off. The device shows up
+as your short name and four digits, like `MZ01_1a2b`. The first time,
 a six-digit code appears on the Cardputer to type on the phone, so keep
 MeshZero open for that. After pairing, the phone connects by itself.
 

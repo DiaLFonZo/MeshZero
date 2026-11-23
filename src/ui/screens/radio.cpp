@@ -11,8 +11,6 @@
 #include "ui/app.h"
 
 namespace mz {
-namespace {
-
 std::vector<std::string> local_addresses()
 {
     std::vector<std::string> out;
@@ -31,6 +29,8 @@ std::vector<std::string> local_addresses()
     freeifaddrs(list);
     return out;
 }
+
+namespace {
 
 std::string fmt(const char* format, double value)
 {
@@ -78,12 +78,15 @@ public:
                 row("Radio", mesh.offline_text(), true);
                 break;
         }
-        if (mesh.network_access != 1) {
-            row("Network Access (LAN)", "off");
+        if (mesh.app_connection() == Mesh::kAppBluetooth) {
+            row("App connection", "Bluetooth, " + (mesh.bluetooth_name.empty() ? std::string("starting") : mesh.bluetooth_name),
+                !mesh.bluetooth_ok);
+        } else if (mesh.app_connection() != Mesh::kAppWifi) {
+            row("App connection", "off");
         } else {
             const std::vector<std::string> addrs = local_addresses();
-            if (addrs.empty()) row("Network Access (LAN)", "no network", true);
-            for (const auto& a : addrs) row("Network Access (LAN)", a + ":4403");
+            if (addrs.empty()) row("App connection", "Wi-Fi, no network", true);
+            for (const auto& a : addrs) row("App connection", a + ":4403");
         }
 
         if (mesh.ever_ready()) {
@@ -292,9 +295,9 @@ const char* const kHelp =
     "tiles copied there as street/zoom/x/y.png, topo/zoom/x/y.png or usgs/zoom/x/y.jpg are used too.\n\n"
     "OTHER APPS\n"
     "When you exit, the radio stops so other apps can use the LoRa cap, unless Run in background is on in Setup. "
-    "To use the radio from MeshMonitor or a phone, turn on Network Access (LAN) in Setup. The address is on the "
-    "Radio page. Without Wi-Fi, a phone can use Bluetooth instead (early access): turn it on in Setup and pick "
-    "this device in the phone app.\n\n"
+    "To use the radio from other apps, set App connection in Setup. Wi-Fi is for MeshMonitor or a phone app on "
+    "your network; the address is on the Radio page. Bluetooth (early access) is for a phone app when there is no "
+    "Wi-Fi: pick this device in the phone app. Only one of the two is on at a time.\n\n"
     "RADIO OFFLINE\n"
     "Power off, check the cap, power on. For details run:\n"
     "sudo -u meshzero meshzerod doctor\n\n"

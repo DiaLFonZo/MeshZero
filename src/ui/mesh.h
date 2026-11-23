@@ -196,7 +196,6 @@ public:
     // ---- service ----------------------------------------------------
     // Whether other devices on the network may use the API: -1 unknown, 0, 1.
     int network_access = -1;
-    void set_network_access(bool on);
     // Whether the radio keeps running with the app closed: -1 unknown, 0, 1.
     int background = -1;
     void set_background(bool on);
@@ -212,8 +211,12 @@ public:
     std::string bluetooth_name;
     std::string bluetooth_why;    // why it is not working, when it is not
     std::string bluetooth_key;    // the code to type on a phone that is pairing
-    void set_bluetooth(bool on);
     void set_bluetooth_pin(bool on);
+    // How other apps reach this radio; one way at a time, which the service
+    // sees to. -1 while it is not known yet.
+    enum AppConnection { kAppOff = 0, kAppWifi = 1, kAppBluetooth = 2 };
+    int app_connection() const;
+    void set_app_connection(int mode);
 
     void toast(const std::string& text);
 

@@ -143,7 +143,7 @@ def main():
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
     proxy = subprocess.Popen([daemon, "serve", "--listen", NETWORK_ADDR, "--port", str(API_PORT), "--radio-port",
-                              str(RADIO_PORT)], env=dict(os.environ, MESHZERO_STATE_DIR=state),
+                              str(RADIO_PORT)], env=dict(os.environ, MESHZERO_STATE_DIR=state, MESHZERO_BT_BUS="user"),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
     clients = []
@@ -239,6 +239,24 @@ def main():
         clients.remove(remote)
         remote.close()
         print("ok: network access is off by default and can be switched on and off")
+
+        # Other apps come in over the network or over Bluetooth, never both.
+        def bluetooth_on():
+            out = subprocess.run([daemon, "bluetooth", "status"], env=dict(os.environ, MESHZERO_STATE_DIR=state),
+                                 capture_output=True, text=True).stdout
+            return "Bluetooth: on" in out
+        if "not in this build" not in subprocess.run([daemon, "bluetooth", "status"], capture_output=True, text=True,
+                                                     env=dict(os.environ, MESHZERO_STATE_DIR=state)).stdout:
+            a.sendData(b"mz:net=1", destinationId=0, portNum=256)
+            wait_for(lambda: can_connect(NETWORK_ADDR), what="network access to open")
+            a.sendData(b"mz:bt=1", destinationId=0, portNum=256)
+            wait_for(lambda: bluetooth_on() and not can_connect(NETWORK_ADDR), what="Bluetooth to replace network access")
+            a.sendData(b"mz:net=1", destinationId=0, portNum=256)
+            wait_for(lambda: can_connect(NETWORK_ADDR) and not bluetooth_on(), what="network access to replace Bluetooth")
+            a.sendData(b"mz:net=0", destinationId=0, portNum=256)
+            wait_for(lambda: not can_connect(NETWORK_ADDR), what="network access to close")
+            assert not bluetooth_on()
+            print("ok: turning on Bluetooth turns network access off, and the other way round")
 
         # Choosing whether to run in the background, from the app or a shell,
         # answers the question asked after the update.

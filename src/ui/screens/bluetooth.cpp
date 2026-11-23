@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Bluetooth for the phone apps: its settings page and the page that shows the
-// code a phone has to type to pair.
+// How other apps reach the radio, over Wi-Fi or Bluetooth: its settings page,
+// and the page that shows the code a phone has to type to pair.
 #include "ui/app.h"
 
 namespace mz {
 namespace {
 
-class BluetoothScreen : public Screen {
+class AppConnectionScreen : public Screen {
 public:
-    explicit BluetoothScreen(App& a) : Screen(a)
+    explicit AppConnectionScreen(App& a) : Screen(a)
     {
         list_ = std::make_unique<ui::ListView>(root, 0, 0, kContentW, kContentH);
     }
-    std::string title() const override { return LV_SYMBOL_LEFT " Bluetooth (early access)"; }
+    std::string title() const override { return LV_SYMBOL_LEFT " App connection"; }
     std::string hint() const override { return "Enter change   ? explain   Esc back"; }
 
     void refresh() override
@@ -30,13 +30,21 @@ public:
             it.right_color     = setting ? ui::c_accent() : ui::c_text();
             items.push_back(std::move(it));
         };
-        const bool on = mesh.bluetooth == 1;
-        row("Bluetooth", mesh.bluetooth < 0 ? "not available" : on ? "on" : "off", true);
-        row("Pairing", mesh.bluetooth_pin == 0 ? "no PIN" : "code on this screen", true);
-        row("Name", mesh.bluetooth_name.empty() ? "-" : mesh.bluetooth_name, false);
-        std::string status = "off";
-        if (on) status = mesh.bluetooth_ok ? "phones can find it" : mesh.bluetooth_why.empty() ? "starting" : "not working";
-        row("Status", status, false);
+        const int mode = mesh.app_connection();
+        row("Connection", mode == Mesh::kAppWifi ? "Wi-Fi" : mode == Mesh::kAppBluetooth ? "Bluetooth (early access)" : "off",
+            true);
+        pairing_row_ = -1;
+        if (mode == Mesh::kAppWifi) {
+            const std::vector<std::string> addrs = local_addresses();
+            if (addrs.empty()) row("Address", "no network", false);
+            for (const auto& a : addrs) row("Address", a + ":4403", false);
+        } else if (mode == Mesh::kAppBluetooth) {
+            pairing_row_ = static_cast<int>(items.size());
+            row("Pairing", mesh.bluetooth_pin == 0 ? "no PIN" : "code on this screen", true);
+            row("Name", mesh.bluetooth_name.empty() ? "-" : mesh.bluetooth_name, false);
+            row("Status", mesh.bluetooth_ok ? "phones can find it" : mesh.bluetooth_why.empty() ? "starting" : "not working",
+                false);
+        }
         list_->set_items(items);
     }
 
@@ -46,28 +54,40 @@ public:
         const int i = list_->selected();
         if (key.is_char('?')) {
             std::string text =
-                "Lets the Meshtastic phone apps use this radio over Bluetooth, as they would a radio with Bluetooth "
-                "of its own. In the phone app, look for the name shown here.\n\n"
+                "How other apps use this radio. Only one way is on at a time.\n\n"
+                "Wi-Fi: for MeshMonitor, the meshtastic command or a phone app on your network, through port 4403 at "
+                "the address shown. There is no password, so use it only on networks you trust.\n\n"
+                "Bluetooth (early access): for the Meshtastic phone apps when there is no Wi-Fi to share. In the "
+                "phone app, not the phone's own Bluetooth settings, look for the name shown here. It has seen little "
+                "testing with the phone apps so far.\n\n"
                 "Pairing with a code: the first time a phone connects, six digits appear on this screen to type on "
                 "the phone. MeshZero has to be open for that. Afterwards the phone connects by itself, also while "
                 "MeshZero is closed.\n\n"
                 "No PIN: any phone nearby can connect and use the radio, change its settings included.\n\n"
-                "With Run in background off, the radio starts when a phone connects and stops again after it "
-                "leaves.\n\n"
-                "This is early access: it has seen little testing with the phone apps so far.";
-            if (!mesh.bluetooth_why.empty()) text = "Not working: " + mesh.bluetooth_why + ".\n\n" + text;
-            app.push(make_text_view(app, "Bluetooth", text));
+                "With Run in background off, the radio starts when an app connects and stops again after it leaves.";
+            if (mesh.app_connection() == Mesh::kAppBluetooth && !mesh.bluetooth_why.empty()) {
+                text = "Bluetooth is not working: " + mesh.bluetooth_why + ".\n\n" + text;
+            }
+            app.push(make_text_view(app, "App connection", text));
             return true;
         }
         if (key.k != K::Enter) return false;
-        if (mesh.bluetooth < 0 || !mesh.ready()) {
-            app.toast(mesh.bluetooth == -1 ? "This build has no Bluetooth support" : "Radio offline", true);
+        if (mesh.app_connection() < 0 || !mesh.ready()) {
+            app.toast("Radio offline", true);
             return true;
         }
         Mesh* m = &mesh;
+        App* a  = &app;
         if (i == 0) {
-            mesh.set_bluetooth(mesh.bluetooth != 1);
-        } else if (i == 1) {
+            const bool bt = mesh.bluetooth >= 0;
+            std::vector<std::string> options = {"Off", "Wi-Fi"};
+            if (bt) options.push_back("Bluetooth (early access)");
+            app.push(make_picker(app, "App connection", options, mesh.app_connection(), [m, a, bt](int choice) {
+                if (choice < 0 || choice > (bt ? 2 : 1)) return;
+                m->set_app_connection(choice);
+                if (choice == Mesh::kAppBluetooth) a->toast("Look for this device in the Meshtastic phone app");
+            }));
+        } else if (i == pairing_row_) {
             app.push(make_picker(app, "Pairing", {"Code on this screen", "No PIN"}, mesh.bluetooth_pin == 0 ? 1 : 0,
                                  [m](int choice) {
                                      if (choice == 0 || choice == 1) m->set_bluetooth_pin(choice == 0);
@@ -78,6 +98,7 @@ public:
 
 private:
     std::unique_ptr<ui::ListView> list_;
+    int pairing_row_ = -1;
 };
 
 // Shown while a phone is pairing; goes away by itself once that is over.
@@ -123,9 +144,9 @@ private:
 
 }  // namespace
 
-std::unique_ptr<Screen> make_bluetooth(App& app)
+std::unique_ptr<Screen> make_app_connection(App& app)
 {
-    return std::make_unique<BluetoothScreen>(app);
+    return std::make_unique<AppConnectionScreen>(app);
 }
 
 std::unique_ptr<Screen> make_bluetooth_pairing(App& app)

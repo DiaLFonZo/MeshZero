@@ -216,19 +216,28 @@ void Mesh::set_background(bool on)
     send_control(on ? "bg=1" : "bg=0");
 }
 
-void Mesh::set_bluetooth(bool on)
+int Mesh::app_connection() const
 {
-    send_control(on ? "bt=1" : "bt=0");
+    if (network_access < 0) return -1;
+    return bluetooth == 1 ? kAppBluetooth : network_access == 1 ? kAppWifi : kAppOff;
+}
+
+void Mesh::set_app_connection(int mode)
+{
+    // Switching one on makes the service switch the other off.
+    if (mode == kAppWifi) {
+        send_control("net=1");
+    } else if (mode == kAppBluetooth) {
+        send_control("bt=1");
+    } else {
+        send_control("net=0");
+        if (bluetooth == 1) send_control("bt=0");
+    }
 }
 
 void Mesh::set_bluetooth_pin(bool on)
 {
     send_control(on ? "btpin=1" : "btpin=0");
-}
-
-void Mesh::set_network_access(bool on)
-{
-    send_control(on ? "net=1" : "net=0");
 }
 
 void Mesh::request_config()
