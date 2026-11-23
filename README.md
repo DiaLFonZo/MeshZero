@@ -28,7 +28,7 @@ other mesh networking technologies.
 - A map of the nodes around you: a simple radar, or pins on a street or
   topographic map. Map tiles are downloaded as you look at them and kept, so
   places you have seen before work without a network.
-- Metric or imperial map units. With imperial, the map's distances are in feet
+- Metric or imperial units. With imperial, distances and altitudes are in feet
   and miles and the topographic map has its heights in feet inside the United
   States.
 - A radio page with link state, counters, GPS fix and a live packet log.

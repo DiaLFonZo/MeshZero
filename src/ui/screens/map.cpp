@@ -142,7 +142,7 @@ private:
     // ---- tile map ------------------------------------------------------------
 
     // Where the tiles come from. The topographic map is the one in feet when
-    // the map's units are imperial.
+    // units are imperial.
     int source() const { return layer_ == tiles::kTopo && ui::imperial() ? tiles::kUsTopo : layer_; }
 
     static std::string count_str(int nodes) { return std::to_string(nodes) + (nodes == 1 ? " node" : " nodes"); }

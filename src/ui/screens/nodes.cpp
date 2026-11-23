@@ -133,7 +133,7 @@ public:
                 const bool online = n.last_heard && now - n.last_heard < kOnlineWindowS;
                 std::string right;
                 if (sort_ == Sort::Distance && e.dist >= 0) {
-                    right = distance_str(e.dist) + "  ";
+                    right = distance_str(e.dist, ui::imperial()) + "  ";
                 } else if (n.via_mqtt) {
                     right = "mqtt  ";
                 } else if (n.has_hops_away && n.hops_away > 0) {
@@ -299,11 +299,11 @@ public:
             char buf[48];
             snprintf(buf, sizeof(buf), "%.5f, %.5f", lat, lon);
             info("Coordinates", buf);
-            if (n->position.has_altitude) info("Altitude", std::to_string(n->position.altitude) + " m");
+            if (n->position.has_altitude) info("Altitude", altitude_str(n->position.altitude, ui::imperial()));
             double my_lat, my_lon;
             if (!self && mesh.my_position(my_lat, my_lon)) {
                 const double bearing = geo_bearing_deg(my_lat, my_lon, lat, lon);
-                info("Distance", distance_str(geo_distance_m(my_lat, my_lon, lat, lon)));
+                info("Distance", distance_str(geo_distance_m(my_lat, my_lon, lat, lon), ui::imperial()));
                 info("Bearing", fmt("%.0f deg ", bearing) + compass_point(bearing));
             }
             if (n->position.sats_in_view) info("Satellites", std::to_string(n->position.sats_in_view));

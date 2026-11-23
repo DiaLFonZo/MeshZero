@@ -66,6 +66,8 @@ double geo_distance_m(double lat1, double lon1, double lat2, double lon2);
 double geo_bearing_deg(double lat1, double lon1, double lat2, double lon2);
 // "850m", "12.3km"; or, in feet and miles, "500ft", "7.67mi".
 std::string distance_str(double metres, bool imperial = false);
+// A height above sea level, given in metres: "152 m" or "499 ft".
+std::string altitude_str(int metres, bool imperial = false);
 constexpr double kFootM = 0.3048;
 constexpr double kMileM = 1609.344;
 

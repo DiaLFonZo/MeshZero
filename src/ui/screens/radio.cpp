@@ -148,7 +148,7 @@ public:
                 char buf[48];
                 snprintf(buf, sizeof(buf), "%.5f, %.5f", lat, lon);
                 row("Position", buf);
-                if (self->position.has_altitude) row("Altitude", std::to_string(self->position.altitude) + " m");
+                if (self->position.has_altitude) row("Altitude", altitude_str(self->position.altitude, ui::imperial()));
                 if (self->position.sats_in_view) row("Satellites", std::to_string(self->position.sats_in_view));
                 if (self->position.time) row("Fix age", age_str(self->position.time, now_s()));
             } else if (mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED) {
@@ -277,8 +277,8 @@ const char* const kHelp =
     "Del on a chat in Chats, or Delete chat history in a message's menu, deletes its messages.\n\n"
     "MAP\n"
     "M switches between the radar, a street map and a topographic map. Enter lets the arrows move the map; 0 "
-    "brings it back around you. Map units in Setup chooses metres or feet, also for the topographic map; the one "
-    "in feet covers the United States. Maps are downloaded as you look at them and kept, so what you have seen "
+    "brings it back around you. Units in Setup chooses metres or feet, also for the topographic map; the one in "
+    "feet covers the United States. Maps are downloaded as you look at them and kept, so what you have seen "
     "works without a network. Map downloads in Setup turns that off and shows the folder they are kept in; map "
     "tiles copied there as street/zoom/x/y.png, topo/zoom/x/y.png or usgs/zoom/x/y.jpg are used too.\n\n"
     "OTHER APPS\n"

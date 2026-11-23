@@ -112,6 +112,9 @@ static void test_util()
     CHECK(distance_str(5 * kMileM, true) == "5mi");
     CHECK(distance_str(12345, true) == "7.67mi");
     CHECK(distance_str(250 * kMileM, true) == "250mi");
+    CHECK(altitude_str(152) == "152 m");
+    CHECK(altitude_str(152, true) == "499 ft");
+    CHECK(altitude_str(-3, true) == "-10 ft");
 
     // Map tiles: the world is one tile at zoom 0, with 0,0 in its middle.
     double x = 0, y = 0;

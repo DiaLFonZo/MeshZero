@@ -252,6 +252,12 @@ double metres_per_px(double lat, int zoom)
     return 156543.03392804097 * std::cos(lat * M_PI / 180.0) / static_cast<double>(1u << zoom);
 }
 
+std::string altitude_str(int metres, bool imperial)
+{
+    if (!imperial) return std::to_string(metres) + " m";
+    return std::to_string(std::lround(metres / kFootM)) + " ft";
+}
+
 std::string distance_str(double metres, bool imperial)
 {
     char buf[24];
