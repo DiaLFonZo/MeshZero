@@ -156,6 +156,31 @@ class Radio:
             out.append(info)
         return out
 
+    # What the weather station's sensors read, as a node with them attached sends it.
+    def sensor_readings(self, kind):
+        t = telemetry_pb2.Telemetry(time=int(time.time()))
+        if kind == "environment_metrics":
+            t.environment_metrics.temperature = 11.4
+            t.environment_metrics.relative_humidity = 83
+            t.environment_metrics.barometric_pressure = 1009.6
+            t.environment_metrics.wind_speed = 7.2
+            t.environment_metrics.wind_direction = 245
+            t.environment_metrics.wind_gust = 12.5
+            t.environment_metrics.rainfall_24h = 3.4
+        elif kind == "power_metrics":
+            t.power_metrics.ch1_voltage = 13.12
+            t.power_metrics.ch1_current = 412.0
+            t.power_metrics.ch2_voltage = 18.4
+            t.power_metrics.ch2_current = 655.5
+        elif kind == "air_quality_metrics":
+            t.air_quality_metrics.pm10_standard = 4
+            t.air_quality_metrics.pm25_standard = 7
+            t.air_quality_metrics.pm100_standard = 9
+            t.air_quality_metrics.co2 = 431
+        else:
+            return None
+        return t
+
     # ------------------------------------------------------------ config
     def send_config(self, nonce):
         my_info = mesh_pb2.MyNodeInfo(my_node_num=MY_NUM, reboot_count=3, min_app_version=30200, pio_env="native")
@@ -255,9 +280,20 @@ class Radio:
                 if node.num == dest:
                     self.deliver(dest, MY_NUM, port, node.position.SerializeToString(), request_id=packet.id, delay=1.5)
         elif port == portnums_pb2.TELEMETRY_APP and dest in known:
+            asked = telemetry_pb2.Telemetry()
+            asked.ParseFromString(packet.decoded.payload)
+            kind = asked.WhichOneof("variant") or "device_metrics"
+            print("telemetry request: %s %s" % (known[dest][1], kind), flush=True)
             for node in self.other_nodes():
-                if node.num == dest:
+                if node.num != dest:
+                    continue
+                if kind == "device_metrics":
                     t = telemetry_pb2.Telemetry(time=int(time.time()), device_metrics=node.device_metrics)
+                elif known[dest][1] == "WX01":
+                    t = self.sensor_readings(kind)  # only the weather station has sensors
+                else:
+                    t = None
+                if t is not None:
                     self.deliver(dest, MY_NUM, port, t.SerializeToString(), request_id=packet.id, delay=1.5)
 
     def on_admin(self, packet):
@@ -311,6 +347,8 @@ class Radio:
         stats.local_stats.num_total_nodes = 9
         stats.local_stats.noise_floor = -104
         self.deliver(MY_NUM, MY_NUM, portnums_pb2.TELEMETRY_APP, stats.SerializeToString())
+        self.deliver(0xA1B2C306, BROADCAST, portnums_pb2.TELEMETRY_APP,
+                     self.sensor_readings("environment_metrics").SerializeToString(), hops=2)
         self.deliver(0xA1B2C302, MY_NUM, portnums_pb2.TEXT_MESSAGE_APP, b"Hey, are you bringing the antenna tonight?",
                      delay=1.0, pki=True)
         if self.args.bell:

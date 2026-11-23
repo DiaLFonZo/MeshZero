@@ -248,7 +248,15 @@ public:
             }
             action(LV_SYMBOL_SHUFFLE, "Trace route", [this, id]() { mesh.traceroute(id); });
             action(LV_SYMBOL_GPS, "Request position", [this, id]() { mesh.request_position(id); });
-            action(LV_SYMBOL_CHARGE, "Request telemetry", [this, id]() { mesh.request_telemetry(id); });
+            action(LV_SYMBOL_CHARGE, "Request telemetry", [this, id]() {
+                app.push(make_picker(app, LV_SYMBOL_LEFT " Request telemetry",
+                                     {"Device (battery, uptime)", "Environment sensors", "Power sensors",
+                                      "Air quality sensors"},
+                                     -1, [this, id](int choice) {
+                                         if (choice < 0 || choice > 3) return;
+                                         mesh.request_telemetry(id, static_cast<TelemetryKind>(choice));
+                                     }));
+            });
             action(LV_SYMBOL_REFRESH, "Request node info", [this, id]() { mesh.request_nodeinfo(id); });
             const bool fav = n->is_favorite;
             action(fav ? LV_SYMBOL_MINUS : LV_SYMBOL_PLUS, fav ? "Remove from favorites" : "Add to favorites",
@@ -296,6 +304,84 @@ public:
             if (d.has_channel_utilization) info("Channel utilization", fmt("%.1f%%", d.channel_utilization));
             if (d.has_air_util_tx) info("Air time (TX)", fmt("%.1f%%", d.air_util_tx));
             if (d.has_uptime_seconds) info("Uptime", uptime_str(d.uptime_seconds));
+        }
+        const auto found = mesh.sensors.find(num_);
+        if (found != mesh.sensors.end()) {
+            const Sensors& s    = found->second;
+            const bool imperial = ui::imperial();
+            const auto temp     = [imperial](double c) {
+                return imperial ? fmt("%.1f \xC2\xB0" "F", c * 9 / 5 + 32) : fmt("%.1f \xC2\xB0" "C", c);
+            };
+            const auto wind = [imperial](double ms) { return imperial ? fmt("%.1f mph", ms * 2.23694) : fmt("%.1f m/s", ms); };
+            const auto rain = [imperial](double mm) { return imperial ? fmt("%.2f in", mm / 25.4) : fmt("%.1f mm", mm); };
+            if (s.has_env) {
+                const meshtastic_EnvironmentMetrics& e = s.env;
+                header("Environment");
+                info("Received", age_str(s.env_ts, now) + " ago");
+                if (e.has_temperature) info("Temperature", temp(e.temperature));
+                if (e.has_relative_humidity) info("Humidity", fmt("%.0f%%", e.relative_humidity));
+                if (e.has_barometric_pressure) info("Pressure", fmt("%.1f hPa", e.barometric_pressure));
+                if (e.has_gas_resistance) info("Gas resistance", fmt("%.2f MOhm", e.gas_resistance));
+                if (e.has_iaq) info("Air quality index (IAQ)", std::to_string(e.iaq));
+                if (e.has_voltage) info("Voltage", fmt("%.2f V", e.voltage));
+                if (e.has_current) info("Current", fmt("%.1f mA", e.current));
+                if (e.has_lux) info("Light", fmt("%.0f lx", e.lux));
+                if (e.has_white_lux) info("White light", fmt("%.0f lx", e.white_lux));
+                if (e.has_ir_lux) info("Infrared", fmt("%.0f lx", e.ir_lux));
+                if (e.has_uv_lux) info("Ultraviolet", fmt("%.0f lx", e.uv_lux));
+                if (e.has_wind_speed) info("Wind", wind(e.wind_speed));
+                if (e.has_wind_direction) {
+                    info("Wind from", std::to_string(e.wind_direction) + " deg " + compass_point(e.wind_direction));
+                }
+                if (e.has_wind_gust) info("Wind gust", wind(e.wind_gust));
+                if (e.has_wind_lull) info("Wind lull", wind(e.wind_lull));
+                if (e.has_rainfall_1h) info("Rain, last hour", rain(e.rainfall_1h));
+                if (e.has_rainfall_24h) info("Rain, last 24 hours", rain(e.rainfall_24h));
+                if (e.has_soil_moisture) info("Soil moisture", std::to_string(e.soil_moisture) + "%");
+                if (e.has_soil_temperature) info("Soil temperature", temp(e.soil_temperature));
+                if (e.has_distance) info("Distance sensor", fmt("%.0f mm", e.distance));
+                if (e.has_weight) info("Weight", fmt("%.2f kg", e.weight));
+                if (e.has_radiation) info("Radiation", fmt("%.2f uR/h", e.radiation));
+                for (pb_size_t i = 0; i < e.one_wire_temperature_count; ++i) {
+                    info("Probe " + std::to_string(i + 1), temp(e.one_wire_temperature[i]));
+                }
+            }
+            if (s.has_power) {
+                const meshtastic_PowerMetrics& p = s.power;
+                header("Power");
+                info("Received", age_str(s.power_ts, now) + " ago");
+                const auto channel = [&](int index, bool has_v, float v, bool has_c, float c) {
+                    if (!has_v && !has_c) return;
+                    std::string value;
+                    if (has_v) value = fmt("%.2f V", v);
+                    if (has_c) value += (value.empty() ? "" : "  ") + fmt("%.1f mA", c);
+                    info("Channel " + std::to_string(index), value);
+                };
+                channel(1, p.has_ch1_voltage, p.ch1_voltage, p.has_ch1_current, p.ch1_current);
+                channel(2, p.has_ch2_voltage, p.ch2_voltage, p.has_ch2_current, p.ch2_current);
+                channel(3, p.has_ch3_voltage, p.ch3_voltage, p.has_ch3_current, p.ch3_current);
+                channel(4, p.has_ch4_voltage, p.ch4_voltage, p.has_ch4_current, p.ch4_current);
+                channel(5, p.has_ch5_voltage, p.ch5_voltage, p.has_ch5_current, p.ch5_current);
+                channel(6, p.has_ch6_voltage, p.ch6_voltage, p.has_ch6_current, p.ch6_current);
+                channel(7, p.has_ch7_voltage, p.ch7_voltage, p.has_ch7_current, p.ch7_current);
+                channel(8, p.has_ch8_voltage, p.ch8_voltage, p.has_ch8_current, p.ch8_current);
+            }
+            if (s.has_air) {
+                const meshtastic_AirQualityMetrics& q = s.air;
+                header("Air quality");
+                info("Received", age_str(s.air_ts, now) + " ago");
+                const auto dust = [&](const char* name, uint32_t value) { info(name, std::to_string(value) + " ug/m3"); };
+                if (q.has_pm10_standard) dust("PM1.0", q.pm10_standard);
+                if (q.has_pm25_standard) dust("PM2.5", q.pm25_standard);
+                if (q.has_pm40_standard) dust("PM4.0", q.pm40_standard);
+                if (q.has_pm100_standard) dust("PM10", q.pm100_standard);
+                if (q.has_co2) info("CO2", std::to_string(q.co2) + " ppm");
+                if (q.has_co2_temperature) info("Temperature", temp(q.co2_temperature));
+                if (q.has_co2_humidity) info("Humidity", fmt("%.0f%%", q.co2_humidity));
+                if (q.has_pm_voc_idx) info("VOC index", fmt("%.0f", q.pm_voc_idx));
+                if (q.has_pm_nox_idx) info("NOx index", fmt("%.0f", q.pm_nox_idx));
+                if (q.has_form_formaldehyde) info("Formaldehyde", fmt("%.0f ppb", q.form_formaldehyde));
+            }
         }
         double lat, lon;
         if (Mesh::node_position(*n, lat, lon)) {

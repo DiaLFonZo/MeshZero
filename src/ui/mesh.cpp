@@ -330,6 +330,7 @@ void Mesh::on_frame(const std::string& payload)
             if (my_num != 0 && my_num != msg.my_info.my_node_num) {
                 // A different radio identity: everything cached belongs to someone else.
                 nodes.clear();
+                sensors.clear();
                 chats.clear();
                 info_asks_.clear();
                 history_loaded_ = false;
@@ -570,6 +571,24 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
             } else if (t.which_variant == meshtastic_Telemetry_local_stats_tag && p.from == my_num) {
                 local_stats     = t.variant.local_stats;
                 has_local_stats = true;
+                ++rev_nodes;
+            } else if (t.which_variant == meshtastic_Telemetry_environment_metrics_tag) {
+                Sensors& s = sensors[p.from];
+                s.has_env  = true;
+                s.env      = t.variant.environment_metrics;
+                s.env_ts   = p.rx_time ? p.rx_time : now_s();
+                ++rev_nodes;
+            } else if (t.which_variant == meshtastic_Telemetry_power_metrics_tag) {
+                Sensors& s  = sensors[p.from];
+                s.has_power = true;
+                s.power     = t.variant.power_metrics;
+                s.power_ts  = p.rx_time ? p.rx_time : now_s();
+                ++rev_nodes;
+            } else if (t.which_variant == meshtastic_Telemetry_air_quality_metrics_tag) {
+                Sensors& s = sensors[p.from];
+                s.has_air  = true;
+                s.air      = t.variant.air_quality_metrics;
+                s.air_ts   = p.rx_time ? p.rx_time : now_s();
                 ++rev_nodes;
             }
             break;
@@ -940,16 +959,33 @@ void Mesh::pump_info_asks()
     ++rev_chats;  // a chat may now say it is waiting
 }
 
-void Mesh::request_telemetry(uint32_t dest)
+void Mesh::request_telemetry(uint32_t dest, TelemetryKind kind)
 {
     // A node answers with the kind of readings the request names.
     meshtastic_Telemetry t = meshtastic_Telemetry_init_zero;
-    t.which_variant        = meshtastic_Telemetry_device_metrics_tag;
+    const char* what       = "Telemetry";
+    switch (kind) {
+        case TelemetryKind::Device:
+            t.which_variant = meshtastic_Telemetry_device_metrics_tag;
+            break;
+        case TelemetryKind::Environment:
+            t.which_variant = meshtastic_Telemetry_environment_metrics_tag;
+            what            = "Environment readings";
+            break;
+        case TelemetryKind::Power:
+            t.which_variant = meshtastic_Telemetry_power_metrics_tag;
+            what            = "Power readings";
+            break;
+        case TelemetryKind::AirQuality:
+            t.which_variant = meshtastic_Telemetry_air_quality_metrics_tag;
+            what            = "Air quality readings";
+            break;
+    }
     const std::string bytes      = pb_encode_msg(meshtastic_Telemetry_fields, t);
     const meshtastic_NodeInfo* n = node(dest);
     const uint32_t id = send_packet(dest, n ? n->channel : 0, meshtastic_PortNum_TELEMETRY_APP,
                                     reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), true, true);
-    toast(id ? "Telemetry requested from " + short_name(dest) : "Radio offline");
+    toast(id ? std::string(what) + " requested from " + short_name(dest) : "Radio offline");
 }
 
 // ------------------------------------------------------------------ admin
@@ -1105,6 +1141,7 @@ void Mesh::remove_node(uint32_t num)
     m.remove_by_nodenum       = num;
     admin(m);
     nodes.erase(num);
+    sensors.erase(num);
     ++rev_nodes;
 }
 
@@ -1170,6 +1207,7 @@ void Mesh::nodedb_reset()
         const meshtastic_NodeInfo keep = *self;
         nodes.clear();
         nodes[my_num] = keep;
+        sensors.clear();
     }
     ++rev_nodes;
 }

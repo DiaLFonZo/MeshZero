@@ -62,6 +62,22 @@ struct UiEvent {
     TraceResult trace;
 };
 
+// Sensor readings a node has sent, kept while the app runs: the radio itself
+// only remembers a node's device metrics.
+struct Sensors {
+    bool has_env = false;
+    meshtastic_EnvironmentMetrics env{};
+    uint32_t env_ts = 0;
+    bool has_power = false;
+    meshtastic_PowerMetrics power{};
+    uint32_t power_ts = 0;
+    bool has_air = false;
+    meshtastic_AirQualityMetrics air{};
+    uint32_t air_ts = 0;
+};
+
+enum class TelemetryKind { Device, Environment, Power, AirQuality };
+
 // Whether a message text carries the alert bell character.
 inline bool has_bell(const std::string& text)
 {
@@ -95,6 +111,7 @@ public:
     meshtastic_DeviceMetadata metadata{};
     bool has_metadata = false;
     std::map<uint32_t, meshtastic_NodeInfo> nodes;
+    std::map<uint32_t, Sensors> sensors;
     meshtastic_Channel channels[kMaxChannels]{};
     meshtastic_LocalConfig config{};
     meshtastic_LocalModuleConfig modules{};
@@ -156,7 +173,7 @@ public:
     // the public key. `user_waiting` marks a request someone is looking at the
     // screen for: it goes first and is sent even when the channel is busy.
     void want_info(uint32_t num, bool need_key, bool user_waiting, uint64_t delay_ms = 0);
-    void request_telemetry(uint32_t dest);
+    void request_telemetry(uint32_t dest, TelemetryKind kind = TelemetryKind::Device);
 
     // ---- administration (local node) ---------------------------------
     void admin(meshtastic_AdminMessage& msg, bool want_response = false);
