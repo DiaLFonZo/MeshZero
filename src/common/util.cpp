@@ -231,6 +231,27 @@ double geo_bearing_deg(double lat1, double lon1, double lat2, double lon2)
     return deg;
 }
 
+void geo_to_world_px(double lat, double lon, int zoom, double& x, double& y)
+{
+    const double size = static_cast<double>(kTilePx) * static_cast<double>(1u << zoom);
+    lat               = std::max(-85.05112878, std::min(85.05112878, lat));
+    const double s    = std::sin(lat * M_PI / 180.0);
+    x                 = (lon + 180.0) / 360.0 * size;
+    y                 = (0.5 - std::log((1 + s) / (1 - s)) / (4 * M_PI)) * size;
+}
+
+void world_px_to_geo(double x, double y, int zoom, double& lat, double& lon)
+{
+    const double size = static_cast<double>(kTilePx) * static_cast<double>(1u << zoom);
+    lon               = x / size * 360.0 - 180.0;
+    lat               = std::atan(std::sinh(M_PI * (1 - 2 * y / size))) * 180.0 / M_PI;
+}
+
+double metres_per_px(double lat, int zoom)
+{
+    return 156543.03392804097 * std::cos(lat * M_PI / 180.0) / static_cast<double>(1u << zoom);
+}
+
 std::string distance_str(double metres)
 {
     char buf[24];

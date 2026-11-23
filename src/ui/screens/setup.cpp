@@ -13,6 +13,7 @@
 #include "meshtastic/apponly.pb.h"
 #include "ui/camera.h"
 #include "ui/screens/editor.h"
+#include "ui/tiles.h"
 #include "ui/update.h"
 
 namespace mz {
@@ -2012,6 +2013,21 @@ public:
                                        {"Back", on ? "Turn off update checks" : "Turn on update checks"},
                                        [on](int c) {
                                            if (c == 1) update::set_enabled(!on);
+                                       }));
+              });
+        entry("Map downloads", tiles::downloads() ? "on" : "off",
+              "The street and topographic maps are made of small pictures. With this on, the ones you look at are "
+              "downloaded from openstreetmap.org and opentopomap.org, which tells those sites roughly where you are "
+              "looking, and kept for next time. Off, only maps already on the device are shown.",
+              [a]() {
+                  const bool on = tiles::downloads();
+                  a->push(make_confirm(*a, "Map downloads",
+                                       std::string(on ? "Missing map pictures are downloaded when you look at a map."
+                                                      : "Map downloads are turned off.") +
+                                           "\n\nMaps are kept in " + tiles::dir() + ".",
+                                       {"Back", on ? "Turn off map downloads" : "Turn on map downloads"},
+                                       [on](int c) {
+                                           if (c == 1) tiles::set_downloads(!on);
                                        }));
               });
         entry("Help", "", "",

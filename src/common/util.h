@@ -65,6 +65,15 @@ std::string age_str(uint32_t then_s, uint32_t now);
 double geo_distance_m(double lat1, double lon1, double lat2, double lon2);
 double geo_bearing_deg(double lat1, double lon1, double lat2, double lon2);
 std::string distance_str(double metres);
+
+// Web Mercator, the projection map tiles use. A position becomes a point in
+// the world at a zoom level, in pixels: 256 per tile, x east from 180 W and y
+// south from about 85 N. Latitudes beyond the projection's edge are held at it.
+constexpr int kTilePx = 256;
+void geo_to_world_px(double lat, double lon, int zoom, double& x, double& y);
+void world_px_to_geo(double x, double y, int zoom, double& lat, double& lon);
+// How many metres one pixel covers at a latitude and zoom.
+double metres_per_px(double lat, int zoom);
 const char* compass_point(double bearing_deg);
 
 // The charge of this device's battery in percent, as the kernel reports it

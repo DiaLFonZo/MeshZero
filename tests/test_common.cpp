@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -103,6 +104,22 @@ static void test_util()
     const double b = geo_bearing_deg(52.0, 4.0, 52.0, 5.0);
     CHECK(b > 85 && b < 95);
     CHECK(std::string(compass_point(b)) == "E");
+
+    // Map tiles: the world is one tile at zoom 0, with 0,0 in its middle.
+    double x = 0, y = 0;
+    geo_to_world_px(0, 0, 0, x, y);
+    CHECK(std::fabs(x - 128) < 1e-6 && std::fabs(y - 128) < 1e-6);
+    // Amsterdam is in tile 8414/5384 at zoom 14.
+    geo_to_world_px(52.3731, 4.8922, 14, x, y);
+    CHECK(static_cast<int>(x) / kTilePx == 8414 && static_cast<int>(y) / kTilePx == 5384);
+    double lat = 0, lon = 0;
+    world_px_to_geo(x, y, 14, lat, lon);
+    CHECK(std::fabs(lat - 52.3731) < 1e-6 && std::fabs(lon - 4.8922) < 1e-6);
+    // The poles are off the map: they land on its edge instead of at infinity.
+    geo_to_world_px(90, 0, 3, x, y);
+    CHECK(std::fabs(y) < 1e-3);
+    CHECK(std::fabs(metres_per_px(0, 0) - 156543.03) < 0.01);
+    CHECK(std::fabs(metres_per_px(60, 1) - 39135.76) < 0.01);
 }
 
 static void test_battery()

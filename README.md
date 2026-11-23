@@ -25,7 +25,9 @@ other mesh networking technologies.
   message again.
 - Optional background mode that keeps the radio running after you close the app.
 - Node listing with details, actions, and all supported functions.
-- A simple radar-style map of the nodes around you.
+- A map of the nodes around you: a simple radar, or pins on a street or
+  topographic map. Map tiles are downloaded as you look at them and kept, so
+  places you have seen before work without a network.
 - A radio page with link state, counters, GPS fix and a live packet log.
 - Settings for most of what the phone apps cover: region, modem preset,
   channels and keys (add by URL or by scanning a QR code with the camera,
@@ -94,6 +96,8 @@ will reach out to add their settings as this app becomes more popular (hopefully
 | Esc | Back. On a changed settings page it asks whether to save. On the main pages, hold it for 2 seconds to leave the app |
 | Tab, Left, Right | Switch between Chats, Nodes, Map, Radio and Setup |
 | + and - | Zoom the map, 0 to fit everything |
+| M, on the map | Switch between the radar, the street map and the topographic map |
+| Enter, on the map | Lets the arrows move the street or topographic map. Enter again when done |
 | ? | Help |
 
 ## Running in the background
