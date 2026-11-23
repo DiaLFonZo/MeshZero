@@ -11,6 +11,14 @@ namespace {
 
 constexpr uint32_t kOnlineWindowS = 2 * 3600;
 
+constexpr int kFindH = ui::kRowH + 1;
+
+// Which nodes the list shows.
+enum class Show { All, Online, Direct, Favorites, Located, Lora, Count };
+const char* const kShowNames[] = {"All nodes",       "Online (heard in the last 2 hours)", "Heard directly",
+                                  "Favorites",       "With a position",                    "Heard over LoRa, not MQTT"};
+const char* const kShowShort[] = {"all", "online", "direct", "favorites", "located", "LoRa"};
+
 enum class Sort { Heard, Name, Hops, Distance, Count };
 const char* sort_name(Sort s)
 {
@@ -46,6 +54,10 @@ std::string fmt(const char* format, double value)
     return buf;
 }
 
+// Kept while the app runs: the list is built anew each time its page is opened.
+Sort g_sort = Sort::Heard;
+Show g_show = Show::All;
+
 // --------------------------------------------------------------- node list
 
 class NodesScreen : public Screen {
@@ -54,12 +66,23 @@ public:
     {
         list_ = std::make_unique<ui::ListView>(root, 0, 0, kContentW, kContentH);
         list_->set_prefix_width(42);
+        find_ = std::make_unique<ui::TextField>(root, 0, kContentH - kFindH, kContentW, "Name or ID");
+        find_->set_max_bytes(24);
+        lv_obj_add_flag(find_->obj(), LV_OBJ_FLAG_HIDDEN);
     }
     int tab() const override { return kTabNodes; }
+    bool wants_text() const override { return finding_; }
     std::string hint() const override
     {
-        return "Enter open   S sort: " + std::string(sort_name(sort_)) + "   " + std::to_string(online_) + "/" +
-               std::to_string(total_) + " online";
+        const std::string count = std::to_string(shown_) + "/" + std::to_string(total_);
+        if (finding_) return "Type a name or ID   Enter open   Esc all nodes   " + count;
+        // With every node listed, the count says how many of them are around.
+        if (g_show == Show::All) {
+            return "S sort: " + std::string(sort_name(g_sort)) + "   V show: all   / find   " + std::to_string(online_) +
+                   "/" + std::to_string(total_) + " on";
+        }
+        return "S sort: " + std::string(sort_name(g_sort)) + "   V show: " +
+               kShowShort[static_cast<size_t>(g_show)] + "   / find   " + count;
     }
 
     void refresh() override
@@ -73,19 +96,48 @@ public:
             double dist;
         };
         std::vector<Entry> entries;
-        online_ = 0;
+        online_                 = 0;
+        const std::string query = finding_ ? trim(find_->text()) : "";
         for (const auto& [num, n] : mesh.nodes) {
             double lat, lon, dist = -1;
-            if (have_me && num != mesh.my_num && Mesh::node_position(n, lat, lon)) {
-                dist = geo_distance_m(my_lat, my_lon, lat, lon);
+            const bool located = Mesh::node_position(n, lat, lon);
+            if (have_me && num != mesh.my_num && located) dist = geo_distance_m(my_lat, my_lon, lat, lon);
+            const bool self   = num == mesh.my_num;
+            const bool online = self || (n.last_heard && now - n.last_heard < kOnlineWindowS);
+            if (online) ++online_;
+            // This device stays in every view; a search is about names only.
+            bool keep = true;
+            if (!query.empty()) {
+                keep = contains_nocase(mesh.long_name(num), query) || contains_nocase(mesh.short_name(num), query) ||
+                       contains_nocase(node_id_str(num), query);
+            } else if (!self) {
+                switch (g_show) {
+                    case Show::Online:
+                        keep = online;
+                        break;
+                    case Show::Direct:
+                        keep = !n.via_mqtt && n.has_hops_away && n.hops_away == 0;
+                        break;
+                    case Show::Favorites:
+                        keep = n.is_favorite;
+                        break;
+                    case Show::Located:
+                        keep = located;
+                        break;
+                    case Show::Lora:
+                        keep = !n.via_mqtt;
+                        break;
+                    default:
+                        break;
+                }
             }
-            entries.push_back({&n, dist});
-            if (num == mesh.my_num || (n.last_heard && now - n.last_heard < kOnlineWindowS)) ++online_;
+            if (keep) entries.push_back({&n, dist});
         }
-        total_ = static_cast<int>(entries.size());
+        total_ = static_cast<int>(mesh.nodes.size());
+        shown_ = static_cast<int>(entries.size());
 
         const uint32_t me = mesh.my_num;
-        const Sort sort   = sort_;
+        const Sort sort   = g_sort;
         std::sort(entries.begin(), entries.end(), [me, sort](const Entry& a, const Entry& b) {
             if ((a.n->num == me) != (b.n->num == me)) return a.n->num == me;
             if (a.n->is_favorite != b.n->is_favorite) return a.n->is_favorite;
@@ -132,7 +184,7 @@ public:
             } else {
                 const bool online = n.last_heard && now - n.last_heard < kOnlineWindowS;
                 std::string right;
-                if (sort_ == Sort::Distance && e.dist >= 0) {
+                if (g_sort == Sort::Distance && e.dist >= 0) {
                     right = distance_str(e.dist, ui::imperial()) + "  ";
                 } else if (n.via_mqtt) {
                     right = "mqtt  ";
@@ -152,6 +204,14 @@ public:
             items.push_back(std::move(it));
             nums_.push_back(n.num);
         }
+        if (items.empty()) {
+            ui::ListItem it;
+            it.text      = query.empty() ? "No nodes to show here" : "No node with that name or ID";
+            it.has_color = true;
+            it.color     = ui::c_dim();
+            items.push_back(std::move(it));
+            nums_.push_back(0);
+        }
         list_->set_items(items);
         if (selected_num != 0) {
             for (size_t i = 0; i < nums_.size(); ++i) {
@@ -165,25 +225,61 @@ public:
 
     bool on_key(const Key& key) override
     {
+        if (finding_ && key.k == K::Esc) {
+            set_finding(false);
+            return true;
+        }
         if (list_->handle_key(key)) return true;
         const size_t i = static_cast<size_t>(list_->selected());
-        if (key.k == K::Enter && i < nums_.size()) {
-            app.push(make_node_detail(app, nums_[i]));
+        if (key.k == K::Enter) {
+            if (i < nums_.size() && nums_[i] != 0) app.push(make_node_detail(app, nums_[i]));
+            return true;
+        }
+        if (finding_) {
+            // Everything else is typing; Tab must not leave the page half-way through a name.
+            if (key.k != K::Tab) find_->handle_key(key);
+            return true;
+        }
+        if (key.is_char('/')) {
+            set_finding(true);
             return true;
         }
         if (key.is_char('s') || key.is_char('S')) {
-            sort_ = static_cast<Sort>((static_cast<int>(sort_) + 1) % static_cast<int>(Sort::Count));
+            g_sort = static_cast<Sort>((static_cast<int>(g_sort) + 1) % static_cast<int>(Sort::Count));
+            return true;
+        }
+        if (key.is_char('v') || key.is_char('V')) {
+            std::vector<std::string> options;
+            for (const char* name : kShowNames) options.push_back(name);
+            app.push(make_picker(app, LV_SYMBOL_LEFT " Show", options, static_cast<int>(g_show), [](int choice) {
+                if (choice >= 0 && choice < static_cast<int>(Show::Count)) g_show = static_cast<Show>(choice);
+            }));
             return true;
         }
         return false;
     }
 
 private:
+    // Shows or puts away the line a name is typed into; the list makes room for it.
+    void set_finding(bool on)
+    {
+        finding_ = on;
+        find_->set_text("");
+        if (on) {
+            lv_obj_remove_flag(find_->obj(), LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(find_->obj(), LV_OBJ_FLAG_HIDDEN);
+        }
+        list_->set_height(kContentH - (on ? kFindH + 1 : 0));
+    }
+
     std::unique_ptr<ui::ListView> list_;
+    std::unique_ptr<ui::TextField> find_;
     std::vector<uint32_t> nums_;
-    Sort sort_  = Sort::Heard;
-    int online_ = 0;
-    int total_  = 0;
+    bool finding_ = false;
+    int online_   = 0;
+    int total_    = 0;
+    int shown_    = 0;
 };
 
 // ------------------------------------------------------------- node detail

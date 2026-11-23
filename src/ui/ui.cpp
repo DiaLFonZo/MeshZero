@@ -384,6 +384,14 @@ ListView::ListView(lv_obj_t* parent, int x, int y, int w, int h) : w_(w), h_(h)
     lv_obj_remove_flag(cont_, LV_OBJ_FLAG_CLICKABLE);
 }
 
+void ListView::set_height(int h)
+{
+    if (h == h_) return;
+    h_ = h;
+    lv_obj_set_height(cont_, h);
+    if (!rows_.empty()) select(selected_);
+}
+
 bool ListView::selectable(int index) const
 {
     return index >= 0 && index < static_cast<int>(items_.size()) && !items_[static_cast<size_t>(index)].header;

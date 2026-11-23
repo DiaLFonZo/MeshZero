@@ -388,6 +388,20 @@ static void test_qr()
     qr_release();
 }
 
+static void test_find()
+{
+    CHECK(contains_nocase("Harbour Weather", "weather"));
+    CHECK(contains_nocase("Harbour Weather", "BOUR W"));
+    CHECK(contains_nocase("!a1b2c306", "C306"));
+    CHECK(contains_nocase("anything", ""));
+    CHECK(contains_nocase("", ""));
+    CHECK(!contains_nocase("Harbour", "harbours"));
+    CHECK(!contains_nocase("", "x"));
+    CHECK(!contains_nocase("Anna Rooftop", "roof top"));
+    // Only ASCII letters fold; other bytes must match as they are.
+    CHECK(contains_nocase("Gr\xC3\xBC\xC3\x9F" "e", "gr\xC3\xBC"));
+}
+
 // The alert bell is a control character inside the text; it has to still be
 // there after the message was written to the history and read back.
 static void test_history_bell()
@@ -423,6 +437,7 @@ int main()
     test_history();
     test_history_bad_ack();
     test_history_bell();
+    test_find();
     test_qr();
     if (failures == 0) printf("all tests passed\n");
     return failures == 0 ? 0 : 1;

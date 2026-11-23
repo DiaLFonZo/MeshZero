@@ -135,6 +135,18 @@ std::string trim(const std::string& text)
     return text.substr(a, b - a);
 }
 
+bool contains_nocase(const std::string& text, const std::string& needle)
+{
+    const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + 32) : c; };
+    if (needle.size() > text.size()) return false;
+    for (size_t i = 0; i + needle.size() <= text.size(); ++i) {
+        size_t j = 0;
+        while (j < needle.size() && lower(text[i + j]) == lower(needle[j])) ++j;
+        if (j == needle.size()) return true;
+    }
+    return false;
+}
+
 int version_compare(const std::string& a, const std::string& b)
 {
     if (a.empty() || b.empty()) return a.empty() == b.empty() ? 0 : a.empty() ? -1 : 1;

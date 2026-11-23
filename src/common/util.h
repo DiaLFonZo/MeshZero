@@ -39,6 +39,9 @@ std::string unescape_field(const std::string& text);
 
 std::vector<std::string> split(const std::string& text, char sep);
 std::string trim(const std::string& text);
+// Whether text contains needle, taking upper and lower case ASCII letters as
+// the same. An empty needle is in every text.
+bool contains_nocase(const std::string& text, const std::string& needle);
 
 // Compares dotted version numbers such as "0.1.10" and "0.2": below zero,
 // zero or above zero as a is older than, the same as or newer than b. A part

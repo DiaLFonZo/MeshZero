@@ -87,6 +87,7 @@ class ListView {
 public:
     ListView(lv_obj_t* parent, int x, int y, int w, int h);
     void set_prefix_width(int w) { prefix_w_ = w; }
+    void set_height(int h);
     void set_items(const std::vector<ListItem>& items);
     int selected() const { return selected_; }
     void select(int index);
