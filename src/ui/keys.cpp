@@ -297,6 +297,12 @@ bool key_from_name(const std::string& name, Key& out)
         out.ch = static_cast<uint8_t>(name[0]);
         return true;
     }
+    if (name.size() == 6 && name.compare(0, 5, "ctrl+") == 0) {
+        out.k    = K::Char;
+        out.ch   = static_cast<uint8_t>(name[5]);
+        out.ctrl = true;
+        return true;
+    }
     return false;
 }
 

@@ -388,6 +388,31 @@ static void test_qr()
     qr_release();
 }
 
+// The alert bell is a control character inside the text; it has to still be
+// there after the message was written to the history and read back.
+static void test_history_bell()
+{
+    char tmpl[] = "/tmp/mzhistXXXXXX";
+    const char* dir = mkdtemp(tmpl);
+    CHECK(dir != nullptr);
+    if (!dir) return;
+    const std::string path = std::string(dir) + "/messages.log";
+    {
+        HistoryWriter w(path);
+        StoredMsg m;
+        m.ts   = 1000;
+        m.id   = 21;
+        m.from = 0xaabbccdd;
+        m.to   = kBroadcast;
+        m.text = "Storm warning\a";
+        w.append(m);
+    }
+    const std::vector<StoredMsg> msgs = history_load(path);
+    CHECK(msgs.size() == 1 && msgs[0].text == "Storm warning\a");
+    unlink(path.c_str());
+    rmdir(dir);
+}
+
 int main()
 {
     test_framing();
@@ -397,6 +422,7 @@ int main()
     test_battery();
     test_history();
     test_history_bad_ack();
+    test_history_bell();
     test_qr();
     if (failures == 0) printf("all tests passed\n");
     return failures == 0 ? 0 : 1;

@@ -16,6 +16,7 @@ constexpr size_t kDefaultAccent = 3;  // Green
 size_t g_accent                 = kDefaultAccent;
 bool g_appearance_loaded        = false;
 bool g_imperial                 = false;
+Sounds g_sounds                 = Sounds::All;
 
 std::string appearance_file()
 {
@@ -41,6 +42,7 @@ void load_appearance()
     std::string key, value;
     while (in >> key >> value) {
         if (key == "units") g_imperial = value == "imperial";
+        if (key == "sounds") g_sounds = value == "off" ? Sounds::Off : value == "direct" ? Sounds::Direct : Sounds::All;
         if (key != "accent") continue;
         for (size_t i = 0; i < accents().size(); ++i) {
             if (value == accents()[i].name) g_accent = i;
@@ -53,7 +55,8 @@ void save_appearance()
     make_dirs(user_state_dir());
     std::ofstream out(appearance_file() + ".tmp", std::ios::trunc);
     if (!out) return;
-    out << "accent " << accents()[g_accent].name << '\n' << "units " << (g_imperial ? "imperial" : "metric") << '\n';
+    out << "accent " << accents()[g_accent].name << '\n' << "units " << (g_imperial ? "imperial" : "metric") << '\n'
+        << "sounds " << (g_sounds == Sounds::Off ? "off" : g_sounds == Sounds::Direct ? "direct" : "all") << '\n';
     out.close();
     rename((appearance_file() + ".tmp").c_str(), appearance_file().c_str());
 }
@@ -83,6 +86,31 @@ void set_imperial(bool on)
     load_appearance();
     g_imperial = on;
     save_appearance();
+}
+
+Sounds sounds()
+{
+    load_appearance();
+    return g_sounds;
+}
+
+void set_sounds(Sounds mode)
+{
+    load_appearance();
+    g_sounds = mode;
+    save_appearance();
+}
+
+const char* sounds_name(Sounds mode)
+{
+    switch (mode) {
+        case Sounds::Off:
+            return "Off";
+        case Sounds::Direct:
+            return "Direct messages";
+        default:
+            return "All messages";
+    }
 }
 
 lv_color_t c_bg()

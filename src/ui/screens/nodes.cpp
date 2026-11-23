@@ -256,6 +256,10 @@ public:
             const bool ign = n->is_ignored;
             action(ign ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE, ign ? "Stop ignoring" : "Ignore this node",
                    [this, id, ign]() { mesh.set_ignored(id, !ign); });
+            const bool muted = n->is_muted;
+            action(muted ? LV_SYMBOL_BELL : LV_SYMBOL_MUTE,
+                   muted ? "Unmute direct messages" : "Mute direct messages",
+                   [this, id, muted]() { mesh.set_muted(ChatKey{true, id}, !muted); });
             action(LV_SYMBOL_TRASH, "Remove from node list", [this, id]() {
                 app.push(make_confirm(app, "Remove node", "Remove " + mesh.long_name(id) + "?",
                                       {"Cancel", "Remove"}, [this, id](int choice) {

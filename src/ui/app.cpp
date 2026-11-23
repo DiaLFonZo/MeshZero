@@ -5,6 +5,7 @@
 #include <ctime>
 
 #include "common/util.h"
+#include "ui/sound.h"
 #include "ui/update.h"
 
 namespace mz {
@@ -340,9 +341,22 @@ void App::tick()
         UiEvent ev = std::move(mesh.events.front());
         mesh.events.pop_front();
         switch (ev.type) {
-            case UiEvent::NewMessage:
-                notify(LV_SYMBOL_ENVELOPE " " + ev.text);
+            case UiEvent::NewMessage: {
+                // A bell is meant to get through: it rings in a muted
+                // conversation too, and in the one on screen.
+                const bool muted       = mesh.muted(ev.chat);
+                const ui::Sounds mode  = ui::sounds();
+                if (ev.bell) {
+                    if (mode != ui::Sounds::Off) sound::play(sound::Kind::Alert);
+                    if (!ev.seen) notify(LV_SYMBOL_BELL " " + ev.text);
+                } else if (!muted) {
+                    if (mode == ui::Sounds::All || (mode == ui::Sounds::Direct && ev.chat.dm)) {
+                        sound::play(sound::Kind::Message);
+                    }
+                    notify(LV_SYMBOL_ENVELOPE " " + ev.text);
+                }
                 break;
+            }
             case UiEvent::Toast:
                 toast(ev.text);
                 break;

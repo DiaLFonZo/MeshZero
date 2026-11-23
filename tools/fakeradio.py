@@ -61,6 +61,7 @@ class Radio:
         self.owner_short = "MZ01"
         self.packet_id = random.randrange(1, 1 << 30)
         self.nodeinfo_ignored = 0
+        self.muted = set()
 
         self.lora = config_pb2.Config.LoRaConfig(
             use_preset=True, hop_limit=3, tx_enabled=True, tx_power=0,
@@ -150,6 +151,8 @@ class Radio:
             info.device_metrics.air_util_tx = 0.2 * (i + 1)
             info.device_metrics.uptime_seconds = 3600 * (i + 2)
             info.is_favorite = i == 0
+            if num in self.muted:
+                info.is_muted = True
             out.append(info)
         return out
 
@@ -272,6 +275,11 @@ class Radio:
             self.modules[name] = getattr(admin.set_module_config, name)
         elif which == "set_channel":
             self.channels[admin.set_channel.index] = admin.set_channel
+            print("channel %d muted=%s" % (admin.set_channel.index, admin.set_channel.settings.module_settings.is_muted),
+                  flush=True)
+        elif which == "toggle_muted_node":
+            self.muted ^= {admin.toggle_muted_node}
+            print("node %08x muted=%s" % (admin.toggle_muted_node, admin.toggle_muted_node in self.muted), flush=True)
         print("admin:", which, flush=True)
         self.ack(MY_NUM, packet.id, delay=0.1)
 
@@ -305,6 +313,14 @@ class Radio:
         self.deliver(MY_NUM, MY_NUM, portnums_pb2.TELEMETRY_APP, stats.SerializeToString())
         self.deliver(0xA1B2C302, MY_NUM, portnums_pb2.TEXT_MESSAGE_APP, b"Hey, are you bringing the antenna tonight?",
                      delay=1.0, pki=True)
+        if self.args.bell:
+            time.sleep(self.args.bell)
+            self.deliver(0xA1B2C307, BROADCAST, portnums_pb2.TEXT_MESSAGE_APP,
+                         "\U0001F514 Storm warning for the coast\a".encode())
+            self.deliver(0xA1B2C304, MY_NUM, portnums_pb2.TEXT_MESSAGE_APP, b"Did you see the warning?", hops=1,
+                         delay=6.0, pki=True)
+            self.deliver(0xA1B2C301, BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, b"Thanks Eva, tying things down.",
+                         delay=9.0)
         if self.args.stranger:
             time.sleep(2.0)
             self.deliver(STRANGER[0], BROADCAST, portnums_pb2.TEXT_MESSAGE_APP, b"First time on this mesh, hello!",
@@ -367,6 +383,9 @@ if __name__ == "__main__":
                         help="leave the first N node info requests unanswered")
     parser.add_argument("--stranger", action="store_true",
                         help="a node missing from the node list posts on the channel and sends a direct message")
+    parser.add_argument("--bell", type=float, default=0, metavar="SECONDS",
+                        help="this long after the chatter a message with an alert bell arrives on the channel, "
+                             "then a direct message and one more on the channel")
     parser.add_argument("--chatter-delay", type=float, default=2.0)
     parser.add_argument("--chatter-gap", type=float, default=0.7)
     parser.add_argument("--home", metavar="LAT,LON", help="where the mesh is, instead of Amsterdam")

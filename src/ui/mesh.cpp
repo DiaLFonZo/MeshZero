@@ -644,10 +644,14 @@ void Mesh::add_message(const ChatKey& key, StoredMsg msg, bool live)
             ++c.unread;
         }
     }
-    if (live && !msg.outgoing && !is_active) {
+    // A message in the conversation on screen needs no notice, but its bell still rings.
+    const bool bell = !msg.is_tapback() && has_bell(msg.text);
+    if (live && !msg.outgoing && (!is_active || bell)) {
         UiEvent ev;
         ev.type = UiEvent::NewMessage;
         ev.chat = key;
+        ev.bell = bell;
+        ev.seen = is_active;
         ev.text = short_name(msg.from) + (msg.is_tapback() ? " reacted " : ": ") + msg.text;
         events.push_back(std::move(ev));
     }
@@ -938,6 +942,7 @@ void Mesh::pump_info_asks()
 
 void Mesh::request_telemetry(uint32_t dest)
 {
+    // A node answers with the kind of readings the request names.
     meshtastic_Telemetry t = meshtastic_Telemetry_init_zero;
     t.which_variant        = meshtastic_Telemetry_device_metrics_tag;
     const std::string bytes      = pb_encode_msg(meshtastic_Telemetry_fields, t);
@@ -1284,8 +1289,46 @@ std::string Mesh::chat_title(const ChatKey& key) const
 int Mesh::total_unread() const
 {
     int total = 0;
-    for (const auto& [key, c] : chats) total += c.unread;
+    for (const auto& [key, c] : chats) {
+        if (!muted(key)) total += c.unread;
+    }
     return total;
+}
+
+bool Mesh::muted(const ChatKey& key) const
+{
+    if (key.dm) {
+        const meshtastic_NodeInfo* n = node(key.id);
+        return n && n->is_muted;
+    }
+    if (key.id >= static_cast<uint32_t>(kMaxChannels)) return false;
+    const meshtastic_ChannelSettings& s = channels[key.id].settings;
+    return s.has_module_settings && s.module_settings.is_muted;
+}
+
+bool Mesh::set_muted(const ChatKey& key, bool mute)
+{
+    if (!ready()) return false;
+    if (muted(key) == mute) return true;
+    if (key.dm) {
+        // The radio only has a switch to flip, and only for nodes it knows.
+        const auto it = nodes.find(key.id);
+        if (it == nodes.end()) return false;
+        meshtastic_AdminMessage m = meshtastic_AdminMessage_init_zero;
+        m.which_payload_variant   = meshtastic_AdminMessage_toggle_muted_node_tag;
+        m.toggle_muted_node       = key.id;
+        admin(m);
+        it->second.is_muted = mute;
+        ++rev_nodes;
+        ++rev_chats;
+        return true;
+    }
+    if (!channel_enabled(static_cast<int>(key.id))) return false;
+    meshtastic_Channel ch                = channels[key.id];
+    ch.settings.has_module_settings      = true;
+    ch.settings.module_settings.is_muted = mute;
+    set_channel(ch);
+    return true;
 }
 
 bool Mesh::region_unset() const

@@ -39,6 +39,13 @@ void set_accent(size_t index);
 bool imperial();
 void set_imperial(bool on);
 
+// Which incoming messages make a sound. A message with an alert bell sounds
+// in both of the modes that are not Off. Saved for the next start.
+enum class Sounds { Off, Direct, All };
+Sounds sounds();
+void set_sounds(Sounds mode);
+const char* sounds_name(Sounds mode);
+
 const lv_font_t* font();
 const lv_font_t* font_small();
 

@@ -1946,6 +1946,17 @@ public:
               open(page_store_forward));
         entry("Range test", mesh.modules.range_test.enabled ? "on" : "off",
               "Sends numbered test messages to find out how far your radio reaches.", open(page_range_test));
+        header("Notifications");
+        entry("Sounds", ui::sounds_name(ui::sounds()),
+              "Which new messages make a sound while MeshZero is open. A message sent with an alert bell rings "
+              "louder and longer, also in a muted chat, unless sounds are off. M on a chat in Chats mutes it. How "
+              "loud it is follows the device's volume.",
+              [a]() {
+                  a->push(make_picker(*a, "Sounds", {"Off", "Direct messages", "All messages"},
+                                      static_cast<int>(ui::sounds()), [](int i) {
+                                          if (i >= 0 && i <= 2) ui::set_sounds(static_cast<ui::Sounds>(i));
+                                      }));
+              });
         header("Appearance");
         entry("Accent color", ui::accents()[ui::accent_index()].name, "",
               [a]() { a->push(std::make_unique<AccentScreen>(*a)); });

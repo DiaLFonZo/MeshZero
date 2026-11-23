@@ -19,6 +19,7 @@
 #include "ui/display.h"
 #include "ui/keys.h"
 #include "ui/mesh.h"
+#include "ui/sound.h"
 #include "ui/update.h"
 
 using namespace mz;
@@ -208,6 +209,7 @@ int main(int argc, char** argv)
         app.start();
 
         if (!script.empty()) {
+            sound::set_enabled(false);
             // Scripted runs stay off the network unless told where to look.
             if (getenv("MESHZERO_UPDATE_URL")) update::start();
             rc = run_script(script, app, mesh);

@@ -56,9 +56,17 @@ struct TraceResult {
 struct UiEvent {
     enum Type { NewMessage, Toast, Trace, LinkChanged } type = Toast;
     ChatKey chat;
+    bool bell = false;  // NewMessage: it carries an alert bell
+    bool seen = false;  // NewMessage: its conversation is the one on screen
     std::string text;
     TraceResult trace;
 };
+
+// Whether a message text carries the alert bell character.
+inline bool has_bell(const std::string& text)
+{
+    return text.find('\a') != std::string::npos;
+}
 
 enum class LinkState { Disconnected, Connecting, Syncing, Ready };
 
@@ -112,6 +120,7 @@ public:
     std::string chat_title(const ChatKey& key) const;
     std::string preset_name() const;
     bool channel_enabled(int index) const;
+    // Unread messages in the conversations that are not muted.
     int total_unread() const;
     bool region_unset() const;
     bool my_position(double& lat, double& lon) const;
@@ -121,6 +130,13 @@ public:
     Chat& chat(const ChatKey& key);
     void set_active_chat(const ChatKey* key);
     void mark_read(const ChatKey& key);
+    // A muted conversation makes no sound and shows no notice, and is left out
+    // of the unread count. The radio keeps it: with the channel, or for direct
+    // messages with the node, so other apps on this radio see the same.
+    bool muted(const ChatKey& key) const;
+    // False when it cannot be set: no such channel, or a node the radio does
+    // not know.
+    bool set_muted(const ChatKey& key, bool muted);
     // Deletes the messages of one conversation, or of all, here and in the
     // history the service keeps.
     void delete_history(const ChatKey& key);
