@@ -1930,6 +1930,10 @@ public:
                                        "app. There is no password.",
                                        {"Off", "On"}, [m](int c) { m->set_network_access(c == 1); }));
               });
+        entry("Bluetooth", mesh.bluetooth == 1 ? "on, early access" : "early access",
+              "Lets the Meshtastic phone apps use this radio over Bluetooth, for when there is no Wi-Fi to share. "
+              "Early access: it has seen little testing with the phone apps so far.",
+              [a]() { a->push(make_bluetooth(*a)); });
         header("Modules");
         entry("MQTT", mesh.modules.mqtt.enabled ? "on" : "off",
               "Connects the radio to an MQTT server over the internet, to link channels with other meshes and report "

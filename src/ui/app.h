@@ -100,6 +100,7 @@ private:
     bool region_prompted_ = false;
     bool coding_rate_checked_ = false;
     bool background_prompted_ = false;
+    std::string pairing_shown_;     // the pairing code its page was last opened for
     int battery_ = -1;              // percent, -1 without a battery
     bool charging_ = false;
     uint64_t battery_read_ms_ = 0;  // when it was last read, 0 if never
@@ -126,6 +127,9 @@ bool region_supported(int region);
 bool repair_coding_rate(App& app);
 std::unique_ptr<Screen> make_channels(App& app);
 std::unique_ptr<Screen> make_help(App& app);
+// Bluetooth for the phone apps: its settings, and the code shown while a phone pairs.
+std::unique_ptr<Screen> make_bluetooth(App& app);
+std::unique_ptr<Screen> make_bluetooth_pairing(App& app);
 // Scrollable text ending in the credit line and a QR code for the link.
 std::unique_ptr<Screen> make_about_view(App& app, const std::string& title, const std::string& text,
                                         const std::string& link);

@@ -426,6 +426,11 @@ void App::tick()
                                   toast("Your option can be changed in SETUP any time.");
                               }));
         }
+        // A phone is pairing: show the code it asks for, whatever page is open.
+        if (mesh.bluetooth_key != pairing_shown_) {
+            pairing_shown_ = mesh.bluetooth_key;
+            if (!pairing_shown_.empty()) push(make_bluetooth_pairing(*this));
+        }
         if (Screen* s = top()) s->refresh();
         update_chrome();
     }

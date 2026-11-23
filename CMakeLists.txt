@@ -49,10 +49,26 @@ target_compile_options(mz_common PRIVATE -Wall -Wextra)
 
 # ------------------------------------------------------------------ daemon
 add_executable(meshzerod
+    src/daemon/ble.cpp
     src/daemon/hw.cpp
     src/daemon/main.cpp)
 target_link_libraries(meshzerod PRIVATE mz_common)
 target_compile_options(meshzerod PRIVATE -Wall -Wextra)
+
+# Bluetooth goes through the system's Bluetooth daemon over D-Bus, which takes
+# libsystemd (libsystemd-dev). Without it the service is built without Bluetooth.
+option(MESHZERO_REQUIRE_BLUETOOTH "Fail when Bluetooth support cannot be built" OFF)
+find_path(MESHZERO_SDBUS_INCLUDE systemd/sd-bus.h)
+find_library(MESHZERO_SDBUS_LIBRARY systemd)
+if(MESHZERO_SDBUS_INCLUDE AND MESHZERO_SDBUS_LIBRARY)
+    target_compile_definitions(meshzerod PRIVATE MESHZERO_BLUETOOTH=1)
+    target_include_directories(meshzerod PRIVATE ${MESHZERO_SDBUS_INCLUDE})
+    target_link_libraries(meshzerod PRIVATE ${MESHZERO_SDBUS_LIBRARY})
+elseif(MESHZERO_REQUIRE_BLUETOOTH)
+    message(FATAL_ERROR "libsystemd (libsystemd-dev) not found: cannot build Bluetooth support")
+else()
+    message(STATUS "libsystemd not found; building the service without Bluetooth")
+endif()
 
 # ---------------------------------------------------------------------- UI
 if(MESHZERO_BUILD_UI)
@@ -114,6 +130,13 @@ if(MESHZERO_BUILD_TESTS)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_proxy.py" "$<TARGET_FILE:meshzerod>")
         else()
             message(STATUS "Python package 'meshtastic' not found; skipping the proxy end-to-end test")
+        endif()
+        # The Bluetooth service, with the test in the Bluetooth daemon's place (pip install dbus-fast).
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import meshtastic, dbus_fast"
+            RESULT_VARIABLE _mz_no_dbus_fast OUTPUT_QUIET ERROR_QUIET)
+        if(_mz_no_dbus_fast EQUAL 0 AND MESHZERO_SDBUS_INCLUDE AND MESHZERO_SDBUS_LIBRARY)
+            add_test(NAME bluetooth COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bluetooth.py" "$<TARGET_FILE:meshzerod>")
         endif()
     endif()
 endif()

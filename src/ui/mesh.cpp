@@ -216,6 +216,16 @@ void Mesh::set_background(bool on)
     send_control(on ? "bg=1" : "bg=0");
 }
 
+void Mesh::set_bluetooth(bool on)
+{
+    send_control(on ? "bt=1" : "bt=0");
+}
+
+void Mesh::set_bluetooth_pin(bool on)
+{
+    send_control(on ? "btpin=1" : "btpin=0");
+}
+
 void Mesh::set_network_access(bool on)
 {
     send_control(on ? "net=1" : "net=0");
@@ -497,6 +507,18 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
             background = text.back() == '1' ? 1 : 0;
         } else if (text == "mz:bgask=1" || text == "mz:bgask=0") {
             ask_background = text.back() == '1';
+        } else if (text.rfind("mz:btpin=", 0) == 0) {
+            bluetooth_pin = atoi(text.c_str() + 9);
+        } else if (text.rfind("mz:btname=", 0) == 0) {
+            bluetooth_name = text.substr(10);
+        } else if (text.rfind("mz:btok=", 0) == 0) {
+            bluetooth_ok = text.back() == '1';
+        } else if (text.rfind("mz:btwhy=", 0) == 0) {
+            bluetooth_why = text.substr(9);
+        } else if (text.rfind("mz:btkey=", 0) == 0) {
+            bluetooth_key = text.substr(9);
+        } else if (text.rfind("mz:bt=", 0) == 0) {
+            bluetooth = atoi(text.c_str() + 6);
         }
         ++rev_link;
         ++rev_config;

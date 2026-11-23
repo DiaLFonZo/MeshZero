@@ -204,6 +204,17 @@ public:
     // update to 0.2.1 switched it off for them. set_background() answers it.
     bool ask_background = false;
 
+    // Bluetooth for the phone apps, run by the service: -2 unknown, -1 not in
+    // this build, 0, 1. The rest is what the service last said about it.
+    int bluetooth     = -2;
+    int bluetooth_pin = -1;       // pairing with a code: -1 unknown, 0, 1
+    bool bluetooth_ok = false;    // phones can find it right now
+    std::string bluetooth_name;
+    std::string bluetooth_why;    // why it is not working, when it is not
+    std::string bluetooth_key;    // the code to type on a phone that is pairing
+    void set_bluetooth(bool on);
+    void set_bluetooth_pin(bool on);
+
     void toast(const std::string& text);
 
 private:
