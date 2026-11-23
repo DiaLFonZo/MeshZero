@@ -40,7 +40,9 @@ add_library(mz_common STATIC
     src/common/history.cpp
     src/common/proto.cpp
     src/common/qr.cpp
-    src/common/util.cpp)
+    src/common/util.cpp
+    src/common/wmm.cpp
+    src/common/wmm_gen.cpp)
 target_include_directories(mz_common PUBLIC src)
 target_link_libraries(mz_common PUBLIC mz_proto PRIVATE quirc m)
 target_compile_options(mz_common PRIVATE -Wall -Wextra)

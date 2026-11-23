@@ -13,6 +13,7 @@
 #include "meshtastic/apponly.pb.h"
 #include "ui/camera.h"
 #include "ui/screens/editor.h"
+#include "ui/compass.h"
 #include "ui/tiles.h"
 #include "ui/update.h"
 
@@ -1957,6 +1958,13 @@ public:
                   a->push(make_picker(*a, "Units", {"Metric", "Imperial"}, ui::imperial() ? 1 : 0,
                                       [](int i) { ui::set_imperial(i == 1); }));
               });
+        if (compass::available()) {
+            entry("Compass", compass::calibrated() ? "calibrated" : "not calibrated",
+                  "The radar on the Map page can turn with the device, so that what is ahead of you is at the top: "
+                  "press H there. The compass has to be calibrated once, and again when it seems off, by turning "
+                  "the device every way.",
+                  [a]() { a->push(make_compass_calibration(*a)); });
+        }
         header("Maintenance");
         // Plain actions like this one need no explanation; ? does nothing on them.
         entry("Restart radio", "", "",

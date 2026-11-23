@@ -91,6 +91,15 @@ kept on the device.
   (https://www.usgs.gov/programs/national-geospatial-program/national-map),
   in the public domain.
 
+## World Magnetic Model
+
+`src/common/wmm_gen.cpp` holds the coefficients of the World Magnetic Model
+2025, by NOAA's National Centers for Environmental Information and the British
+Geological Survey, used to turn a compass reading into a direction from true
+north. The model is in the public domain.
+
+- Source: https://www.ncei.noaa.gov/products/world-magnetic-model
+
 ## Trademark
 
 Meshtastic® is a registered trademark of Meshtastic LLC. MeshZero is an

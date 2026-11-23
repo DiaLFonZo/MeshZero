@@ -28,6 +28,8 @@ other mesh networking technologies.
 - A map of the nodes around you: a simple radar, or pins on a street or
   topographic map. Map tiles are downloaded as you look at them and kept, so
   places you have seen before work without a network.
+- The radar can turn with the device, using its compass, so that what is ahead
+  of you is at the top.
 - Metric or imperial units. With imperial, distances and altitudes are in feet
   and miles and the topographic map has its heights in feet inside the United
   States.
@@ -99,6 +101,7 @@ will reach out to add their settings as this app becomes more popular (hopefully
 | Esc | Back. On a changed settings page it asks whether to save. On the main pages, hold it for 2 seconds to leave the app |
 | Tab, Left, Right | Switch between Chats, Nodes, Map, Radio and Setup |
 | + and - | Zoom the map, 0 to fit everything |
+| H, on the radar | Turn the radar with the device, using its compass, or keep north up. Asks to calibrate the compass the first time |
 | M, on the map | Switch between the radar, the street map and the topographic map |
 | Enter, on the map | Lets the arrows move the street or topographic map. Enter again when done |
 | ? | Help |

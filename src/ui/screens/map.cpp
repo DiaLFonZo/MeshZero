@@ -6,7 +6,9 @@
 #include <cstring>
 
 #include "common/util.h"
+#include "common/wmm.h"
 #include "ui/app.h"
+#include "ui/compass.h"
 #include "ui/tiles.h"
 
 namespace mz {
@@ -58,6 +60,69 @@ lv_obj_t* plate(lv_obj_t* parent, const std::string& text, lv_color_t color)
     return l;
 }
 
+class CalibrationScreen : public Screen {
+public:
+    CalibrationScreen(App& a, std::function<void()> on_done) : Screen(a), on_done_(std::move(on_done))
+    {
+        text_ = ui::label(root, "", ui::c_text());
+        lv_obj_set_pos(text_, 8, 6);
+        lv_obj_set_width(text_, kContentW - 16);
+        lv_label_set_long_mode(text_, LV_LABEL_LONG_WRAP);
+        lv_obj_t* track = ui::box(root);
+        lv_obj_set_size(track, kBarW, 8);
+        lv_obj_set_pos(track, 8, kContentH - 22);
+        ui::set_bg(track, ui::c_bar());
+        fill_ = ui::box(track);
+        lv_obj_set_size(fill_, 0, 8);
+        ui::set_bg(fill_, ui::c_accent());
+        percent_ = ui::label(root, "", ui::c_dim(), ui::font_small());
+        lv_obj_set_pos(percent_, 8 + kBarW + 6, kContentH - 24);
+    }
+    std::string title() const override { return LV_SYMBOL_LEFT " Calibrate compass"; }
+    std::string hint() const override { return done_ ? "Enter finish   Esc cancel" : "Esc cancel"; }
+    void on_show() override { compass::calibrate_begin(); }
+    void on_hide() override
+    {
+        compass::calibrate_cancel();
+        compass::stop();
+    }
+    void refresh() override
+    {
+        const int p = compass::calibrate_progress();
+        done_       = p >= 100;
+        ui::set_text(text_, done_ ? "That covers it. Press Enter to finish, or keep turning a little longer to make it "
+                                    "more exact."
+                                  : "Turn the device slowly every way, as if drawing a figure of eight in the air, "
+                                    "until each side has pointed at the ground and at the sky. Keep away from metal "
+                                    "and magnets.");
+        lv_obj_set_width(fill_, kBarW * p / 100);
+        ui::set_text(percent_, std::to_string(p) + "%");
+    }
+    bool on_key(const Key& key) override
+    {
+        if (key.k != K::Enter) return false;
+        if (!compass::calibrate_end()) {
+            // Starts over: what was gathered so far did not cover every direction.
+            compass::calibrate_begin();
+            app.toast("Keep turning until it reaches 100%", true);
+            return true;
+        }
+        auto cb = on_done_;
+        app.pop();
+        app.toast("Compass calibrated");
+        if (cb) cb();
+        return true;
+    }
+
+private:
+    static constexpr int kBarW = kContentW - 60;
+    std::function<void()> on_done_;
+    lv_obj_t* text_    = nullptr;
+    lv_obj_t* fill_    = nullptr;
+    lv_obj_t* percent_ = nullptr;
+    bool done_         = false;
+};
+
 class MapScreen : public Screen {
 public:
     explicit MapScreen(App& a) : Screen(a)
@@ -76,12 +141,31 @@ public:
         lv_label_set_long_mode(note_, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_align(note_, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(note_, LV_ALIGN_CENTER, 0, 0);
+        // The radar follows the compass more often than pages are refreshed.
+        timer_ = lv_timer_create(
+            [](lv_timer_t* t) {
+                MapScreen* self = static_cast<MapScreen*>(lv_timer_get_user_data(t));
+                if (self->visible_ && self->layer_ < 0 && self->sampling_) self->refresh_radar();
+            },
+            100, this);
+    }
+    ~MapScreen() override
+    {
+        lv_timer_delete(timer_);
+        if (sampling_) compass::stop();
+    }
+    void on_show() override { visible_ = true; }
+    void on_hide() override
+    {
+        visible_ = false;
+        sync_compass();
     }
     int tab() const override { return kTabMap; }
     std::string hint() const override
     {
         if (layer_ < 0) {
-            return "+/- zoom   0 auto   m map   ring " + distance_str(scale_m_, ui::imperial());
+            return std::string("+/- zoom  0 auto  m map  ") + (compass::available() ? "h compass  " : "") + "ring " +
+                   distance_str(scale_m_, ui::imperial());
         }
         if (moving_) return "arrows move   +/- zoom   0 fit   enter done";
         std::string state;
@@ -116,6 +200,7 @@ public:
             show(pins_, map);
             lv_obj_move_foreground(note_);
         }
+        sync_compass();
         if (map) {
             refresh_map();
         } else {
@@ -414,16 +499,56 @@ private:
 
     // ---- radar ---------------------------------------------------------------
 
+    // The compass is read only while the radar is on screen and turning with it.
+    void sync_compass()
+    {
+        const bool want = visible_ && layer_ < 0 && compass::available() && compass::follow() && compass::calibrated();
+        if (want == sampling_) return;
+        sampling_ = want;
+        dirty_    = true;
+        if (want) {
+            compass::start();
+        } else {
+            compass::stop();
+        }
+    }
+
+    // Which way is up on the radar, in degrees from true north: the way the
+    // device points. False while north is up.
+    bool heading_up(double my_lat, double my_lon, double& deg)
+    {
+        double magnetic = 0;
+        if (!sampling_ || !compass::heading(magnetic)) return false;
+        // A compass points at magnetic north, which is off by an amount that
+        // depends on where on earth it is.
+        if (std::fabs(my_lat - variation_lat_) > 0.1 || std::fabs(my_lon - variation_lon_) > 0.1) {
+            variation_lat_ = my_lat;
+            variation_lon_ = my_lon;
+            variation_     = magnetic_declination(my_lat, my_lon, decimal_year());
+        }
+        deg = std::fmod(magnetic + variation_ + 360.0, 360.0);
+        return true;
+    }
+
     void refresh_radar()
     {
-        if (!dirty_ && mesh.rev_nodes == seen_rev_ && zoom_ == seen_zoom_) return;
+        double my_lat = 0, my_lon = 0, up = 0;
+        const bool have_me = mesh.my_position(my_lat, my_lon);
+        const bool turning = have_me && heading_up(my_lat, my_lon, up);
+        double moved       = std::fabs(up - drawn_up_);
+        if (moved > 180) moved = 360 - moved;
+        if (!dirty_ && mesh.rev_nodes == seen_rev_ && zoom_ == seen_zoom_ && turning == drawn_turning_ &&
+            (!turning || moved < 2)) {
+            return;
+        }
+        drawn_turning_ = turning;
+        drawn_up_      = up;
         seen_rev_  = mesh.rev_nodes;
         seen_zoom_ = zoom_;
         lv_obj_clean(plot_);
         plotted_ = 0;
 
-        double my_lat = 0, my_lon = 0;
-        if (!mesh.my_position(my_lat, my_lon)) {
+        if (!have_me) {
             lv_obj_remove_flag(note_, LV_OBJ_FLAG_HIDDEN);
             ui::set_text(note_, "No position yet\n\nEnable GPS in Setup > Position & GPS.");
             return;
@@ -459,15 +584,29 @@ private:
             lv_obj_set_style_border_width(ring, 1, 0);
             lv_obj_set_style_border_color(ring, lv_color_hex(0x2a3948), 0);
         }
-        lv_obj_t* north = ui::label(plot_, "N", ui::c_dim(), ui::font_small());
-        lv_obj_set_pos(north, kCx - 3, kCy - kRadius - 1);
+        // North sits on the ring; with the compass it goes round as the device turns.
+        const double north_rad = -up * M_PI / 180.0;
+        lv_obj_t* north = ui::label(plot_, "N", turning ? ui::c_accent() : ui::c_dim(), ui::font_small());
+        lv_obj_set_pos(north, kCx - 3 + static_cast<int>(std::lround(std::sin(north_rad) * kRadius)),
+                       kCy - (turning ? 6 : 1) - static_cast<int>(std::lround(std::cos(north_rad) * kRadius)));
+        if (turning) {
+            // A mark for straight ahead, and where that is.
+            lv_obj_t* ahead = ui::box(plot_);
+            lv_obj_set_size(ahead, 2, 5);
+            lv_obj_set_pos(ahead, kCx - 1, kCy - kRadius - 5);
+            ui::set_bg(ahead, ui::c_text());
+            char buf[24];
+            snprintf(buf, sizeof(buf), "%03.0f %s", std::fmod(std::round(up), 360.0), compass_point(up));
+            lv_obj_t* facing = ui::label(plot_, buf, ui::c_text(), ui::font_small());
+            lv_obj_align(facing, LV_ALIGN_TOP_RIGHT, -5, 15);
+        }
 
         // Far nodes first so near ones are drawn on top.
         std::sort(dots.begin(), dots.end(), [](const Dot& a, const Dot& b) { return a.dist > b.dist; });
         for (const Dot& d : dots) {
             const bool outside = d.dist > scale_m_;
             const double r     = outside ? kRadius + 3 : d.dist / scale_m_ * kRadius;
-            const double rad   = d.bearing * M_PI / 180.0;
+            const double rad   = (d.bearing - up) * M_PI / 180.0;
             const int x        = kCx + static_cast<int>(std::lround(std::sin(rad) * r));
             const int y        = kCy - static_cast<int>(std::lround(std::cos(rad) * r));
             const lv_color_t color = outside ? ui::c_dim() : ui::node_color(d.num);
@@ -515,9 +654,28 @@ private:
             zoom_ = -1;
             return true;
         }
+        if (key.is_char('h') || key.is_char('H')) {
+            if (!compass::available()) {
+                app.toast("This device has no compass", true);
+            } else if (!compass::calibrated()) {
+                app.push(make_compass_calibration(app, []() { compass::set_follow(true); }));
+            } else {
+                compass::set_follow(!compass::follow());
+                app.toast(compass::follow() ? "The radar turns with the device" : "North is up");
+            }
+            return true;
+        }
         return false;
     }
 
+    lv_timer_t* timer_   = nullptr;
+    bool visible_        = false;
+    bool sampling_       = false;  // the compass is being read
+    bool drawn_turning_  = false;  // the radar was last drawn turned
+    double drawn_up_     = 0;      // and by this much
+    double variation_    = 0;      // magnetic north, east of true north, here
+    double variation_lat_ = 1000;  // where that was worked out
+    double variation_lon_ = 1000;
     lv_obj_t* plot_      = nullptr;  // radar
     lv_obj_t* canvas_    = nullptr;  // map picture
     lv_obj_t* pins_      = nullptr;  // what is drawn on the map
@@ -549,6 +707,11 @@ private:
 };
 
 }  // namespace
+
+std::unique_ptr<Screen> make_compass_calibration(App& app, std::function<void()> on_done)
+{
+    return std::make_unique<CalibrationScreen>(app, std::move(on_done));
+}
 
 std::unique_ptr<Screen> make_map(App& app)
 {

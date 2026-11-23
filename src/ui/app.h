@@ -110,6 +110,9 @@ std::unique_ptr<Screen> make_tab(App& app, int tab);
 std::unique_ptr<Screen> make_chats(App& app);
 std::unique_ptr<Screen> make_nodes(App& app);
 std::unique_ptr<Screen> make_map(App& app);
+// Has the device turned every way to find what its own magnets add to the
+// compass. on_done is called once that has been kept.
+std::unique_ptr<Screen> make_compass_calibration(App& app, std::function<void()> on_done = nullptr);
 std::unique_ptr<Screen> make_radio(App& app);
 std::unique_ptr<Screen> make_setup(App& app);
 std::unique_ptr<Screen> make_chat(App& app, const ChatKey& key);

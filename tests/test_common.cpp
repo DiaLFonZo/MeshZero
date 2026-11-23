@@ -14,6 +14,7 @@
 #include "common/proto.h"
 #include "common/qr.h"
 #include "common/util.h"
+#include "common/wmm.h"
 
 using namespace mz;
 
@@ -104,6 +105,43 @@ static void test_util()
     const double b = geo_bearing_deg(52.0, 4.0, 52.0, 5.0);
     CHECK(b > 85 && b < 95);
     CHECK(std::string(compass_point(b)) == "E");
+    // A compass: the field points north and, here, 60 degrees into the ground.
+    {
+        const double ci = 0.5, si = std::sqrt(0.75);
+        const auto close = [](double a, double b) {
+            const double d = std::fabs(a - b);
+            return d < 0.01 || d > 359.99;
+        };
+        double h = -1;
+        // Flat on a table, top to the north; then to the east, where north is on the left.
+        const double flat[3] = {0, 0, 9.8};
+        const double to_north[3] = {0, ci, -si}, to_east[3] = {-ci, 0, -si}, to_west[3] = {ci, 0, -si};
+        CHECK(tilt_heading(to_north, flat, h) && close(h, 0));
+        CHECK(tilt_heading(to_east, flat, h) && close(h, 90));
+        CHECK(tilt_heading(to_west, flat, h) && close(h, 270));
+        // Top to the north and lifted by an angle t: the heading stays, also when held upright.
+        for (const double t : {0.5, 1.0, 1.4, M_PI / 2}) {
+            const double acc[3] = {0, std::sin(t), std::cos(t)};
+            const double mag[3] = {0, ci * std::cos(t) - si * std::sin(t), -ci * std::sin(t) - si * std::cos(t)};
+            CHECK(tilt_heading(mag, acc, h) && close(h, 0));
+        }
+        // Rolled onto its right edge by 0.6, top to the east.
+        const double roll = 0.6;
+        const double acc[3] = {-std::sin(roll), 0, std::cos(roll)};
+        const double mag[3] = {-ci * std::cos(roll) + si * std::sin(roll), 0, -ci * std::sin(roll) - si * std::cos(roll)};
+        CHECK(tilt_heading(mag, acc, h) && close(h, 90));
+        const double none[3] = {0, 0, 0}, straight_down[3] = {0, 0, -1};
+        CHECK(!tilt_heading(to_north, none, h));
+        CHECK(!tilt_heading(straight_down, flat, h));
+    }
+    // Magnetic declination, against the test values published with WMM2025.
+    CHECK(std::fabs(magnetic_declination(43, 93, 2025.0, 65) - 0.50) < 0.01);
+    CHECK(std::fabs(magnetic_declination(-33, 109, 2025.0, 51) - -5.49) < 0.01);
+    CHECK(std::fabs(magnetic_declination(-59, -8, 2025.0, 39) - -15.75) < 0.01);
+    CHECK(std::fabs(magnetic_declination(80, -96, 2025.0, 48) - -29.91) < 0.01);
+    // A date outside the model's five years is held at their end.
+    CHECK(magnetic_declination(47.6, -122.3, 2040.0) == magnetic_declination(47.6, -122.3, 2030.0));
+    CHECK(decimal_year() > 2025.0);
     CHECK(distance_str(850) == "850m");
     CHECK(distance_str(12345) == "12.3km");
     CHECK(distance_str(500 * kFootM, true) == "500ft");

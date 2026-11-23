@@ -252,6 +252,40 @@ double metres_per_px(double lat, int zoom)
     return 156543.03392804097 * std::cos(lat * M_PI / 180.0) / static_cast<double>(1u << zoom);
 }
 
+bool tilt_heading(const double mag[3], const double acc[3], double& deg)
+{
+    const auto cross = [](const double a[3], const double b[3], double out[3]) {
+        out[0] = a[1] * b[2] - a[2] * b[1];
+        out[1] = a[2] * b[0] - a[0] * b[2];
+        out[2] = a[0] * b[1] - a[1] * b[0];
+    };
+    const auto unit = [](double v[3]) {
+        const double len = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (len < 1e-9) return false;
+        for (int i = 0; i < 3; ++i) v[i] /= len;
+        return true;
+    };
+    double up[3] = {acc[0], acc[1], acc[2]};
+    double east[3], north[3];
+    if (!unit(up)) return false;
+    // The field points north and into the ground (or out of it): across it and
+    // up lies east, and across up and east lies north.
+    cross(mag, up, east);
+    const double field = std::sqrt(mag[0] * mag[0] + mag[1] * mag[1] + mag[2] * mag[2]);
+    const double level = std::sqrt(east[0] * east[0] + east[1] * east[1] + east[2] * east[2]);
+    if (field < 1e-9 || level < 0.05 * field || !unit(east)) return false;
+    cross(up, east, north);
+    // The top of the screen, unless that points at the sky or the ground: then
+    // the way the back of the device faces.
+    if (std::fabs(up[1]) < 0.8) {
+        deg = std::atan2(east[1], north[1]) * 180.0 / M_PI;
+    } else {
+        deg = std::atan2(-east[2], -north[2]) * 180.0 / M_PI;
+    }
+    if (deg < 0) deg += 360.0;
+    return true;
+}
+
 std::string altitude_str(int metres, bool imperial)
 {
     if (!imperial) return std::to_string(metres) + " m";

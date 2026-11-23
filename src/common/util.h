@@ -81,6 +81,14 @@ void world_px_to_geo(double x, double y, int zoom, double& lat, double& lon);
 double metres_per_px(double lat, int zoom);
 const char* compass_point(double bearing_deg);
 
+// Which way the top of the screen points, in degrees clockwise from magnetic
+// north, from what a magnetometer and an accelerometer read. Both are given in
+// the device's own directions: x to the right of the screen, y to its top, z
+// out of it towards whoever looks at it; the accelerometer reads upwards at
+// rest. Held upright, it is the way the back of the device faces. False when
+// it cannot be told: in free fall, or with the field straight up or down.
+bool tilt_heading(const double mag[3], const double acc[3], double& deg);
+
 // The charge of this device's battery in percent, as the kernel reports it
 // under `root`, or -1 when it has none. Batteries of accessories, such as a
 // game controller, are not this device's. `charging` says whether it is charging.
