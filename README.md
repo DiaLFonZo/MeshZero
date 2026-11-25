@@ -1,3 +1,8 @@
+> **MeshCard note.** This folder is MeshCard's modified copy of
+> [MeshZero](https://github.com/s0liton/MeshZero) by Pedro Santos (s0liton),
+> GPL-3.0-only. The README below is MeshZero's original README, kept as its
+> author wrote it. MeshCard's changes are listed in [MESHCARD_CHANGES.md](MESHCARD_CHANGES.md).
+
 # MeshZero
 
 ![Social Preview of App](assets/social-preview.png)

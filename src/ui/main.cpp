@@ -15,6 +15,7 @@
 #include "common/util.h"
 #include "lvgl.h"
 #include "ui/app.h"
+#include "ui/battery.h"
 #include "ui/camera.h"
 #include "ui/display.h"
 #include "ui/keys.h"
@@ -51,6 +52,111 @@ void usage()
            MESHZERO_VERSION);
 }
 
+// Screen light: dims after 30 s without a key, goes dark after 60 s.
+// Any key or a new message lights it again; the key that wakes a dark
+// screen does nothing else.
+class ScreenLight {
+public:
+    static constexpr uint64_t kDimMs = 30000;
+    static constexpr uint64_t kOffMs = 60000;
+    static constexpr int kFull = 100, kDim = 15, kOff = 0;
+
+    static std::string light_path()
+    {
+        const char* env = getenv("MESHZERO_BACKLIGHT");
+        return env && env[0] ? env : "/sys/class/backlight/backlight/brightness";
+    }
+    // A screen light we may write (the Zero's; none on a PC).
+    static bool available() { return access(light_path().c_str(), W_OK) == 0; }
+
+    void enable()
+    {
+        path_ = light_path();
+        on_   = true;
+        set(kFull);
+        last_ = now_ms();
+    }
+    ~ScreenLight() { if (on_) set(kFull); }
+
+    // Returns false when the key must be dropped (it only woke the screen).
+    bool key(const Key& k)
+    {
+        if (!on_) return true;
+        const uint64_t now = now_ms();
+        last_ = now;
+        if (eating_) {
+            if (k.release || now > eat_until_) eating_ = false;
+            if (now <= eat_until_) return false;
+        }
+        if (level_ == kOff && !k.release) {
+            set(kFull);
+            forced_off_ = false;
+            eating_     = true;
+            eat_until_  = now + 1000;
+            return false;
+        }
+        if (!forced_off_) set(kFull);
+        return true;
+    }
+
+    // Esc on Home: dark now, until the next key or message.
+    void turn_off()
+    {
+        if (!on_) return;
+        forced_off_ = true;
+        set(kOff);
+    }
+
+    // Plugged in: stays fully lit (unless turned off with Esc).
+    void tick(uint32_t wake_count, bool plugged)
+    {
+        if (!on_) return;
+        const uint64_t now = now_ms();
+        // A new message, or plugging in / unplugging, lights the screen again.
+        if (wake_count != seen_wake_ || plugged != was_plugged_) {
+            seen_wake_   = wake_count;
+            was_plugged_ = plugged;
+            last_        = now;
+            forced_off_  = false;
+        }
+        if (forced_off_) return set(kOff);
+        if (plugged) {
+            // The Zero's launcher keeps running behind us and turns the light off on its own
+            // timer; level_ would still say "full". Check the real value every second.
+            if (now - checked_ms_ >= 1000) {
+                checked_ms_ = now;
+                if (FILE* f = fopen(path_.c_str(), "r")) {
+                    int real = -1;
+                    if (fscanf(f, "%d", &real) == 1 && real == 0) level_ = -1;  // forces the write below
+                    fclose(f);
+                }
+            }
+            return set(kFull);
+        }
+        const uint64_t idle = now - last_;
+        set(idle >= kOffMs ? kOff : idle >= kDimMs ? kDim : kFull);
+    }
+
+private:
+    void set(int level)
+    {
+        if (level == level_) return;
+        level_ = level;
+        if (FILE* f = fopen(path_.c_str(), "w")) {
+            fprintf(f, "%d\n", level);
+            fclose(f);
+        }
+    }
+
+    std::string path_;
+    bool on_ = false, eating_ = false, forced_off_ = false, was_plugged_ = false;
+    int level_ = -1;
+    uint64_t last_ = 0, eat_until_ = 0, checked_ms_ = 0;
+    uint32_t seen_wake_ = 0;
+};
+
+ScreenLight g_light;
+
 // Runs the main loop for the given time; returns false when asked to stop.
 bool pump(App& app, Mesh& mesh, Keypad* keypad, uint64_t duration_ms)
 {
@@ -63,9 +169,11 @@ bool pump(App& app, Mesh& mesh, Keypad* keypad, uint64_t duration_ms)
         while (!keys.empty()) {
             const Key k = keys.front();
             keys.pop_front();
-            app.handle_key(k);
+            if (g_light.key(k)) app.handle_key(k);
         }
         app.tick();
+        if (app.take_screen_off_request()) g_light.turn_off();
+        g_light.tick(app.wake_count(), battery_info().charging);
         const uint32_t idle = lv_timer_handler();
         if (g_signal || app.quit_requested() || display_quit_requested()) return false;
         usleep((idle < 5 ? 5 : idle > 20 ? 20 : idle) * 1000);
@@ -113,7 +221,8 @@ int run_script(const std::string& path, App& app, Mesh& mesh)
             std::istringstream parts(arg);
             std::string name;
             int ms = 0;
-            parts >> name >> ms;
+            std::string shot;  // optional: screenshot taken while the key is still down
+            parts >> name >> ms >> shot;
             Key key;
             if (!key_from_name(name, key)) {
                 fprintf(stderr, "meshzero: unknown key '%s'\n", name.c_str());
@@ -121,6 +230,7 @@ int run_script(const std::string& path, App& app, Mesh& mesh)
             }
             app.handle_key(key);
             const bool alive = pump(app, mesh, nullptr, static_cast<uint64_t>(ms));
+            if (alive && !shot.empty()) display_screenshot(shot);
             key.release      = true;
             app.handle_key(key);
             if (!alive) return 0;
@@ -216,6 +326,10 @@ int main(int argc, char** argv)
             Keypad keypad;
             const bool device_keys = display_kind() == DisplayKind::Fbdev;
             if (device_keys && !keypad.open_default()) fprintf(stderr, "meshzero: no keyboard found\n");
+            // The screen light is ours whenever the device has one, also when MeshCard runs in
+            // the Zero's desktop (not fbdev): before, it was left to the launcher there, which
+            // turned it off while plugged in (2026-11-20).
+            if (device_keys || g_light.available()) g_light.enable();
             while (pump(app, mesh, device_keys ? &keypad : nullptr, 1000)) {
             }
         }

@@ -14,6 +14,7 @@ shift
 PYTHON=${PYTHON:-python3}
 RADIO_PORT=${RADIO_PORT:-4415}
 API_PORT=${API_PORT:-4416}
+BIN=${BUILD:-$ROOT/build/host}
 
 WORK=$(mktemp -d)
 cleanup() {
@@ -26,11 +27,11 @@ trap cleanup EXIT
 "$PYTHON" "$ROOT/tools/fakeradio.py" --port "$RADIO_PORT" "$@" >"$WORK/radio.log" 2>&1 &
 RADIO_PID=$!
 sleep 1
-MESHZERO_STATE_DIR="$WORK/state" "$ROOT/build/host/meshzerod" serve --listen 127.0.0.1 \
+MESHZERO_STATE_DIR="$WORK/state" "$BIN/meshzerod" serve --listen 127.0.0.1 \
     --port "$API_PORT" --radio-port "$RADIO_PORT" >"$WORK/proxy.log" 2>&1 &
 PROXY_PID=$!
 sleep 1
 
 cd "$ROOT"
 XDG_STATE_HOME="$WORK/ui" MESHZERO_STATE_DIR="$WORK/state" \
-    "$ROOT/build/host/meshzero" --host "127.0.0.1:$API_PORT" --script "$SCRIPT"
+    "$BIN/meshzero" --host "127.0.0.1:$API_PORT" --script "$SCRIPT"

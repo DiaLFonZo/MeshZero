@@ -12,6 +12,9 @@ endif()
 
 option(MESHZERO_SDL "Build the SDL desktop window backend (needs libsdl2-dev)" OFF)
 option(MESHZERO_BUILD_UI "Build the LVGL user interface" ON)
+# Screen size: 320x170 = Cardputer Zero, 240x135 = Cardputer ADV (PC preview).
+set(MC_SCREEN_W 320 CACHE STRING "Screen width in pixels")
+set(MC_SCREEN_H 170 CACHE STRING "Screen height in pixels")
 set(MESHZERO_LVGL_VERSION "v9.3.0" CACHE STRING "LVGL release tag")
 
 include(GNUInstallDirs)
@@ -37,6 +40,7 @@ target_include_directories(quirc PUBLIC third_party/quirc)
 target_compile_options(quirc PRIVATE -w)
 
 add_library(mz_common STATIC
+    src/common/alert.cpp
     src/common/history.cpp
     src/common/proto.cpp
     src/common/qr.cpp
@@ -51,6 +55,11 @@ add_executable(meshzerod
     src/daemon/main.cpp)
 target_link_libraries(meshzerod PRIVATE mz_common)
 target_compile_options(meshzerod PRIVATE -Wall -Wextra)
+
+# MeshCard: message alarm service (rings the speaker, MeshCard open or not)
+add_executable(meshcard-alertd src/alert/main.cpp)
+target_link_libraries(meshcard-alertd PRIVATE mz_common)
+target_compile_options(meshcard-alertd PRIVATE -Wall -Wextra)
 
 # ---------------------------------------------------------------------- UI
 if(MESHZERO_BUILD_UI)
@@ -83,6 +92,8 @@ if(MESHZERO_BUILD_UI)
     set(MESHZERO_FONT_SOURCE_DIR "${lvgl_src_SOURCE_DIR}/scripts/built_in_font")
     target_compile_definitions(meshzero PRIVATE
         MESHZERO_VERSION="${PROJECT_VERSION}"
+        MC_SCREEN_W=${MC_SCREEN_W}
+        MC_SCREEN_H=${MC_SCREEN_H}
         MESHZERO_DEV_FONT_DIR="${MESHZERO_FONT_SOURCE_DIR}"
         MESHZERO_DEV_EMOJI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts")
 

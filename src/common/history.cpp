@@ -15,6 +15,9 @@ namespace mz {
 
 std::string history_dir()
 {
+#if defined(MESHCARD_ESP32)
+    return "/littlefs/mc";  // Cardputer ADV: the firmware's flash file system
+#endif
     const char* env = getenv("MESHZERO_STATE_DIR");
     return env && env[0] ? env : "/var/lib/meshzero";
 }
@@ -32,11 +35,18 @@ void HistoryWriter::write_line(const std::string& line)
     if (stat(path_.c_str(), &st) == 0 && static_cast<size_t>(st.st_size) > max_bytes_) {
         rename(path_.c_str(), (path_ + ".1").c_str());
     }
+#if defined(MESHCARD_ESP32)
+    FILE* f = fopen(path_.c_str(), "a");
+    if (!f) return;
+    fwrite(line.data(), 1, line.size(), f);
+    fclose(f);
+#else
     FILE* f = fopen(path_.c_str(), "ae");
     if (!f) return;
     fwrite(line.data(), 1, line.size(), f);
     fclose(f);
     chmod(path_.c_str(), 0644);
+#endif
 }
 
 void HistoryWriter::append(const StoredMsg& m)

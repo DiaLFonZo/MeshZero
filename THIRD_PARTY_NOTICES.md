@@ -1,5 +1,11 @@
 # Third-party notices
 
+> **MeshCard note.** This folder is MeshCard's modified copy of
+> [MeshZero](https://github.com/s0liton/MeshZero) by Pedro Santos (s0liton),
+> GPL-3.0-only. The text below is MeshZero's own notice, unchanged.
+> What MeshCard added is listed at the end, under « Added by MeshCard », and
+> in [MESHCARD_CHANGES.md](MESHCARD_CHANGES.md).
+
 MeshZero itself is licensed under the GNU General Public License v3.0 only
 (see `LICENSE`). It includes or is distributed with the following components.
 
@@ -80,3 +86,13 @@ installed in `/usr/share/doc/meshzero/font-licenses`.
 Meshtastic® is a registered trademark of Meshtastic LLC. MeshZero is an
 independent project and is not affiliated with or endorsed by the Meshtastic
 project.
+
+## Added by MeshCard
+
+- **Montserrat** 9.000 (`assets/fonts/Montserrat-Bold.ttf`, `Montserrat-Medium.ttf`,
+  `Montserrat-SemiBold.ttf`) — Copyright 2011 The Montserrat Project Authors
+  (https://github.com/JulietaUla/Montserrat), SIL Open Font License 1.1
+  (`assets/fonts/Montserrat-OFL.txt`).
+- **Pre-rendered fonts** in `src/ui/fonts/adv/` — made from the Montserrat files
+  above with lv_font_conv 1.5.2 (https://github.com/lvgl/lv_font_conv, MIT).
+  The font data stays under the SIL Open Font License 1.1.

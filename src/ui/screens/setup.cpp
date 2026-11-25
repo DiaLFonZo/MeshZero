@@ -2,7 +2,11 @@
 // Setup tab: radio, node, channel and module configuration.
 #include <cstring>
 #include <random>
+#if defined(MESHCARD_ESP32)
+#include <esp_random.h>
+#endif
 
+#include "common/alert.h"
 #include "common/util.h"
 #include "meshtastic/apponly.pb.h"
 #include "ui/camera.h"
@@ -919,8 +923,12 @@ std::unique_ptr<Screen> page_channel(App& app, int index)
     f.push_back(f_action(
         "Generate new key",
         [cfg, a]() {
+#if defined(MESHCARD_ESP32)
+            esp_fill_random(cfg->settings.psk.bytes, 32);
+#else
             std::random_device rd;
             for (auto& b : cfg->settings.psk.bytes) b = static_cast<uint8_t>(rd());
+#endif
             cfg->settings.psk.size = 32;
             a->toast("New key generated");
         },
@@ -981,7 +989,7 @@ public:
 
     void refresh() override
     {
-        std::vector<ui::ListItem> items;
+        ui::ListItems items;
         for (int i = 0; i < kMaxChannels; ++i) {
             const meshtastic_Channel& c = mesh.channels[i];
             ui::ListItem it;
@@ -1087,7 +1095,7 @@ public:
         }
         list_ = std::make_unique<ui::ListView>(root, 0, y, kContentW, kContentH - y);
         list_->set_prefix_width(58);
-        std::vector<ui::ListItem> items;
+        ui::ListItems items;
         int current = 0;
         for (size_t i = 0; i < sizeof(kRegions) / sizeof(kRegions[0]); ++i) {
             const RegionInfo& r = kRegions[i];
@@ -1144,7 +1152,7 @@ public:
 
     void refresh() override
     {
-        std::vector<ui::ListItem> items;
+        ui::ListItems items;
         entries_.clear();
         const auto header = [&](const std::string& text) {
             ui::ListItem it;
@@ -1179,6 +1187,64 @@ public:
         int enabled = 0;
         for (int i = 0; i < kMaxChannels; ++i) enabled += mesh.channel_enabled(i) ? 1 : 0;
         entry("Channels", std::to_string(enabled) + " of 8", [a]() { a->push(make_channels(*a)); });
+        // MeshCard: message alarm (rings even when MeshCard is closed).
+        {
+            const AlertConf al = alert_conf_load();
+            header("Alarm");
+            const auto save = [](AlertConf c, bool ring) {
+                alert_conf_save(c);
+                if (ring && c.on) alert_ring(c);
+            };
+            entry("Alarm", al.on ? "on" : "off", [a, al, save]() {
+                a->push(make_picker(*a, LV_SYMBOL_LEFT " Alarm", {"On", "Off"}, al.on ? 0 : 1, [al, save](int c) {
+                    AlertConf n = al;
+                    n.on        = c == 0;
+                    save(n, false);
+                }));
+            });
+            entry("Ring for", al.all ? "all messages" : "direct messages", [a, al, save]() {
+                a->push(make_picker(*a, LV_SYMBOL_LEFT " Ring for", {"Direct messages", "All messages"}, al.all ? 1 : 0,
+                                    [al, save](int c) {
+                                        AlertConf n = al;
+                                        n.all       = c == 1;
+                                        save(n, false);
+                                    }));
+            });
+            entry("Sound", alert_sound_name(al.sound), [a, al, save]() {
+                std::vector<std::string> names;
+                for (int i = 0; i < kAlertSoundCount; ++i) names.push_back(alert_sound_name(i));
+                a->push(make_picker(*a, LV_SYMBOL_LEFT " Sound", names, al.sound, [al, save](int c) {
+                    AlertConf n = al;
+                    n.sound     = c;
+                    save(n, true);  // plays it, so you hear what you picked
+                }));
+            });
+            entry("Volume", std::to_string(al.volume) + "%", [a, al, save]() {
+                static const int levels[] = {25, 50, 75, 100};
+                int cur = 3;
+                for (int i = 0; i < 4; ++i)
+                    if (al.volume == levels[i]) cur = i;
+                a->push(make_picker(*a, LV_SYMBOL_LEFT " Volume", {"25%", "50%", "75%", "100%"}, cur, [al, save](int c) {
+                    AlertConf n = al;
+                    n.volume    = levels[c < 0 ? 0 : c > 3 ? 3 : c];
+                    save(n, true);
+                }));
+            });
+            entry("Repeat", al.repeat ? "until a key" : "once", [a, al, save]() {
+                a->push(make_picker(*a, LV_SYMBOL_LEFT " Repeat", {"Until a key is pressed", "Ring once"},
+                                    al.repeat ? 0 : 1, [al, save](int c) {
+                                        AlertConf n = al;
+                                        n.repeat    = c == 0;
+                                        save(n, false);
+                                    }));
+            });
+            entry("Test alarm", "", [a, al]() {
+                AlertConf t = al;
+                t.on        = true;
+                alert_ring(t);
+                a->toast("Ringing once");
+            });
+        }
         header("This node");
         entry("Your node", mesh.long_name(mesh.my_num), open(page_user));
         entry("Device", role_name(mesh.config.device.role), open(page_device));
@@ -1188,6 +1254,8 @@ public:
         entry("Power", "", open(page_power));
         entry("Network", "", open(page_network));
         entry("Security", "", open(page_security));
+#if !defined(MESHCARD_ESP32)
+        // Zero only: they talk to meshzerod, which the ADV does not have (its radio is always on).
         entry("Run in background", mesh.background == 0 ? "off" : "on", [a, m]() {
             if (m->background < 0) {
                 a->toast("Radio offline", true);
@@ -1208,6 +1276,7 @@ public:
                                  "There is no password.",
                                  {"Off", "On"}, [m](int c) { m->set_network_access(c == 1); }));
         });
+#endif
         header("Modules");
         entry("MQTT", mesh.modules.mqtt.enabled ? "on" : "off", open(page_mqtt));
         entry("Telemetry", "", open(page_telemetry));
@@ -1243,6 +1312,8 @@ public:
                                      }
                                  }));
         });
+#if !defined(MESHCARD_ESP32)
+        // Zero only: the ADV has no internet link to look for updates.
         const std::string newer = update::available();
         entry("Updates",
               !newer.empty() ? newer + " available" : !update::enabled() ? "off" : update::checked() ? "up to date" : "",
@@ -1260,6 +1331,7 @@ public:
                                            if (c == 1) update::set_enabled(!on);
                                        }));
               });
+#endif
         entry("Help", "", [a]() { a->push(make_help(*a)); });
         list_->set_items(items);
     }

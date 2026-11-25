@@ -161,6 +161,9 @@ std::string release_version(const std::string& json)
 
 std::string user_state_dir()
 {
+#if defined(MESHCARD_ESP32)
+    return "/littlefs/mc";  // Cardputer ADV: the firmware's flash file system
+#endif
     std::string base;
     if (const char* x = getenv("XDG_STATE_HOME"); x && x[0]) {
         base = x;

@@ -97,7 +97,7 @@ public:
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
         const int list_h = static_cast<int>(options_.size()) * ui::kRowH;
         list_            = std::make_unique<ui::ListView>(root, 0, kContentH - list_h - 2, kContentW, list_h);
-        std::vector<ui::ListItem> items;
+        ui::ListItems items;
         for (const auto& o : options_) {
             ui::ListItem it;
             it.text = o;
@@ -133,7 +133,7 @@ public:
         : Screen(a), title_(std::move(title)), on_pick_(std::move(on_pick))
     {
         list_ = std::make_unique<ui::ListView>(root, 0, 0, kContentW, kContentH);
-        std::vector<ui::ListItem> items;
+        ui::ListItems items;
         for (size_t i = 0; i < options.size(); ++i) {
             ui::ListItem it;
             it.text = options[i];

@@ -117,7 +117,7 @@ public:
 
     void refresh() override
     {
-        std::vector<ui::ListItem> items;
+        ui::ListItems items;
         for (const Field& f : fields_) {
             ui::ListItem it;
             it.text = f.label;

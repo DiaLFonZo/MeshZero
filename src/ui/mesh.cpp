@@ -6,8 +6,27 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <ctime>
 #include <random>
 
+#if defined(MESHCARD_ESP32)
+#include <esp_random.h>
+#include <mutex>
+// Cardputer ADV: the radio firmware is in the same chip (src/meshcard/LocalUiAPI.cpp).
+// Packets go straight to its mesh service; everything the screens show is read from the
+// firmware's own data, never synced into a copy here.
+bool mc_send_packet(const meshtastic_MeshPacket* p);
+uint32_t mc_my_node_num();
+uint32_t mc_nodes_rev();
+size_t mc_node_count();
+bool mc_node_at(size_t i, meshtastic_NodeInfo* out);
+bool mc_node_find(uint32_t num, meshtastic_NodeInfo* out);
+int mc_read_settings(meshtastic_LocalConfig* cfg, meshtastic_LocalModuleConfig* mod, meshtastic_Channel* channels,
+                     int count, meshtastic_MyNodeInfo* my);
+void mc_read_metadata(meshtastic_DeviceMetadata* md);
+bool mc_take_packet(meshtastic_MeshPacket* out);
+bool mc_take_heard(meshtastic_MeshPacket* out);
+#else
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -17,17 +36,40 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
+#include "common/alert.h"
 #include "common/util.h"
 
 namespace mz {
 namespace {
 
+#if defined(MESHCARD_ESP32)
+uint32_t random_u32()
+{
+    return esp_random();
+}
+#else
+uint32_t random_u32()
+{
+    static std::mt19937 rng(std::random_device{}());
+    return static_cast<uint32_t>(rng());
+}
+#endif
+
 constexpr uint64_t kReconnectMs   = 1500;
 constexpr uint64_t kSyncTimeoutMs = 45000;
 constexpr uint64_t kHeartbeatMs   = 30000;
+#ifdef MESHCARD_ESP32
+// The ADV has no extra RAM chip: keep less in memory. The messages have one limit for
+// all conversations together, so many chats can never add up past it.
+constexpr size_t kMaxChatMsgs     = 60;
+constexpr size_t kMaxTotalMsgs    = 80;
+constexpr size_t kMaxPacketLog    = 40;
+#else
 constexpr size_t kMaxChatMsgs     = 500;
 constexpr size_t kMaxPacketLog    = 200;
+#endif
 // A node ignores a request for its info when it sent that less than five
 // minutes ago, hence the first wait. Each further one is twice as long.
 constexpr uint64_t kKeyRetryMs    = 6 * 60 * 1000;
@@ -43,14 +85,15 @@ int hops_of(const meshtastic_MeshPacket& p)
 
 Mesh::Mesh()
 {
-    std::random_device rd;
-    id_seq_ = rd();
+    id_seq_ = random_u32();
     load_read_state();
 }
 
 Mesh::~Mesh()
 {
+#if !defined(MESHCARD_ESP32)
     if (fd_ >= 0) close(fd_);
+#endif
 }
 
 void Mesh::configure(const std::string& host, uint16_t port)
@@ -62,9 +105,8 @@ void Mesh::configure(const std::string& host, uint16_t port)
 uint32_t Mesh::next_id()
 {
     // Random high bits with a rolling counter, like the reference clients.
-    static std::mt19937 rng(std::random_device{}());
     id_seq_          = (id_seq_ + 1) & 0x3ff;
-    const uint32_t id = (static_cast<uint32_t>(rng()) << 10) | id_seq_;
+    const uint32_t id = (random_u32() << 10) | id_seq_;
     return id == 0 ? 1 : id;
 }
 
@@ -108,6 +150,129 @@ void Mesh::toast(const std::string& text)
 }
 
 // --------------------------------------------------------------- transport
+
+#if defined(MESHCARD_ESP32)
+// Cardputer ADV: the radio is in the same firmware and always there. Nothing to sync:
+// ready as soon as the firmware knows its own node number.
+
+void Mesh::start_connect()
+{
+    const uint32_t num = mc_my_node_num();
+    if (num == 0) {
+        next_connect_ms_ = now_ms() + 500;
+        return;
+    }
+    my_num = num;
+    fd_    = 1;
+    parser_.reset();
+    out_.clear();
+    last_rx_ms_ = last_hb_ms_ = now_ms();
+    refresh_settings();
+    mc_read_metadata(&metadata);
+    has_metadata  = true;
+    fw_nodes_rev_ = mc_nodes_rev();
+    ensure_channel_chats();
+    if (!history_loaded_) load_history();
+    ever_ready_ = true;
+    set_state(LinkState::Ready);
+    ++rev_nodes;
+    ++rev_chats;
+    ++rev_config;
+}
+
+// Settings straight from the firmware, every second; the screens redraw only on a change.
+void Mesh::refresh_settings()
+{
+    settings_at_ms_   = now_ms();
+    const int changed = mc_read_settings(&config, &modules, channels, kMaxChannels, &my_info);
+    if (changed & 4) {
+        ensure_channel_chats();
+        ++rev_chats;
+    }
+    if (changed & 8) ++rev_nodes;
+    if (changed & 7) ++rev_config;
+}
+
+NodeTable::value_type NodeTable::iterator::operator*() const
+{
+    value_type v{0, meshtastic_NodeInfo_init_zero};
+    if (mc_node_at(i_, &v.second)) v.first = v.second.num;
+    return v;
+}
+
+size_t NodeTable::size() const
+{
+    return mc_node_count();
+}
+
+// Same order of messages for every chat: past the total, the oldest one anywhere goes.
+void Mesh::trim_all_chats()
+{
+    size_t total = 0;
+    for (const auto& [key, c] : chats) total += c.msgs.size();
+    while (total > kMaxTotalMsgs) {
+        Chat* oldest = nullptr;
+        for (auto& [key, c] : chats) {
+            if (!c.msgs.empty() && (!oldest || c.msgs.front().ts < oldest->msgs.front().ts)) oldest = &c;
+        }
+        if (!oldest) return;
+        oldest->msgs.erase(oldest->msgs.begin());
+        --total;
+    }
+}
+
+void Mesh::disconnect(const char* why)
+{
+    (void)why;
+    fd_              = -1;
+    next_connect_ms_ = now_ms() + kReconnectMs;
+    set_state(LinkState::Disconnected);
+}
+
+void Mesh::send_to_radio(const meshtastic_ToRadio& msg)
+{
+    if (fd_ < 0 || state_ != LinkState::Ready) return;
+    if (msg.which_payload_variant == meshtastic_ToRadio_packet_tag && !mc_send_packet(&msg.packet))
+        toast("Radio busy, not sent");
+}
+
+// The "mz:" requests are for the MeshZero daemon on the Zero; here they would
+// only go out over the air, so they are dropped.
+void Mesh::send_control(const std::string& request)
+{
+    (void)request;
+}
+
+void Mesh::poll()
+{
+    const uint64_t now = now_ms();
+    if (fd_ < 0) {
+        if (now >= next_connect_ms_) start_connect();
+        return;
+    }
+
+    // Packets the screens act on, then the radio log lines. A few per pass, so a burst
+    // never holds up the screen.
+    static meshtastic_MeshPacket pkt;  // not on the task stack: it is 350 bytes
+    for (int guard = 0; guard < 4 && mc_take_packet(&pkt); ++guard) on_packet(pkt);
+    for (int guard = 0; guard < 8 && mc_take_heard(&pkt); ++guard) {
+        log_packet(pkt, false);
+        // A new name changes the chat list too.
+        if (pkt.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
+            pkt.decoded.portnum == meshtastic_PortNum_NODEINFO_APP)
+            ++rev_chats;
+    }
+    const uint32_t nodes_rev = mc_nodes_rev();
+    if (nodes_rev != fw_nodes_rev_) {
+        fw_nodes_rev_ = nodes_rev;
+        ++rev_nodes;
+    }
+    if (now - settings_at_ms_ >= 1000) refresh_settings();
+
+    if (has_active_ && active_.dm) ensure_key(active_.id);
+}
+
+#else  // Zero: TCP to meshtasticd
 
 void Mesh::start_connect()
 {
@@ -168,6 +333,8 @@ void Mesh::send_control(const std::string& request)
     send_to_radio(msg);
 }
 
+#endif  // transport set-up
+
 void Mesh::set_background(bool on)
 {
     send_control(on ? "bg=1" : "bg=0");
@@ -180,9 +347,8 @@ void Mesh::set_network_access(bool on)
 
 void Mesh::request_config()
 {
-    static std::mt19937 rng(std::random_device{}());
     do {
-        nonce_ = static_cast<uint32_t>(rng());
+        nonce_ = random_u32();
     } while (nonce_ == 0 || nonce_ == 69420 || nonce_ == 69421);
     meshtastic_ToRadio req    = meshtastic_ToRadio_init_zero;
     req.which_payload_variant = meshtastic_ToRadio_want_config_id_tag;
@@ -193,9 +359,14 @@ void Mesh::request_config()
 
 void Mesh::resync()
 {
+#if defined(MESHCARD_ESP32)
+    if (state_ == LinkState::Ready) refresh_settings();  // the data is the firmware's own
+#else
     if (state_ == LinkState::Ready) request_config();
+#endif
 }
 
+#if !defined(MESHCARD_ESP32)
 void Mesh::poll()
 {
     const uint64_t now = now_ms();
@@ -274,7 +445,13 @@ void Mesh::poll()
     }
 }
 
+#endif  // MESHCARD_ESP32
+
 // ----------------------------------------------------------------- frames
+
+#if !defined(MESHCARD_ESP32)
+static void trim_nodes(std::map<uint32_t, meshtastic_NodeInfo>& nodes, uint32_t me);
+#endif
 
 void Mesh::on_frame(const std::string& payload)
 {
@@ -282,6 +459,7 @@ void Mesh::on_frame(const std::string& payload)
     if (!pb_decode_msg(meshtastic_FromRadio_fields, payload, msg)) return;
 
     switch (msg.which_payload_variant) {
+#if !defined(MESHCARD_ESP32)  // the ADV never syncs: it reads the firmware's data directly
         case meshtastic_FromRadio_my_info_tag:
             if (my_num != 0 && my_num != msg.my_info.my_node_num) {
                 // A different radio identity: everything cached belongs to someone else.
@@ -300,6 +478,7 @@ void Mesh::on_frame(const std::string& payload)
             break;
         case meshtastic_FromRadio_node_info_tag:
             nodes[msg.node_info.num] = msg.node_info;
+            trim_nodes(nodes, my_num);
             ++rev_nodes;
             break;
         case meshtastic_FromRadio_channel_tag:
@@ -395,6 +574,7 @@ void Mesh::on_frame(const std::string& payload)
         case meshtastic_FromRadio_packet_tag:
             on_packet(msg.packet);
             break;
+#endif
         case meshtastic_FromRadio_rebooted_tag:
             toast("Radio restarted");
             break;
@@ -405,6 +585,10 @@ void Mesh::on_frame(const std::string& payload)
             break;
     }
 }
+
+#if !defined(MESHCARD_ESP32)
+static void trim_nodes(std::map<uint32_t, meshtastic_NodeInfo>&, uint32_t) {}
+#endif
 
 void Mesh::ensure_channel_chats()
 {
@@ -453,6 +637,37 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
         ++rev_config;
         return;
     }
+#if defined(MESHCARD_ESP32)
+    // ADV: the firmware already keeps every node's name, position and battery (its own node
+    // list, read through NodeTable) and the radio log has its own line per packet. Only
+    // what the screens act on comes here: texts, acks, traceroutes, our own radio stats.
+    if (p.which_payload_variant != meshtastic_MeshPacket_decoded_tag) return;
+    const meshtastic_Data& d = p.decoded;
+    switch (d.portnum) {
+        case meshtastic_PortNum_TEXT_MESSAGE_APP:
+        case meshtastic_PortNum_RANGE_TEST_APP:  // "seq N": shown in the channel like a message
+            on_text(p);
+            return;
+        case meshtastic_PortNum_ROUTING_APP:
+            on_routing(p);
+            return;
+        case meshtastic_PortNum_TELEMETRY_APP: {
+            meshtastic_Telemetry t = meshtastic_Telemetry_init_zero;
+            if (p.from == my_num && pb_decode_msg(meshtastic_Telemetry_fields, d.payload.bytes, d.payload.size, t) &&
+                t.which_variant == meshtastic_Telemetry_local_stats_tag) {
+                local_stats     = t.variant.local_stats;
+                has_local_stats = true;
+                ++rev_nodes;
+            }
+            return;
+        }
+        default:
+            break;  // traceroute: shared code below
+    }
+    const uint8_t* data = d.payload.bytes;
+    const size_t len    = d.payload.size;
+    switch (d.portnum) {
+#else
     log_packet(p, false);
 
     // Anything we hear from a node proves it is alive.
@@ -467,6 +682,7 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
             n.has_hops_away = true;
             n.hops_away     = static_cast<uint8_t>(hops);
         }
+        trim_nodes(nodes, my_num);  // later lookups below re-add it only if it was just dropped
         ++rev_nodes;
     }
 
@@ -477,6 +693,7 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
 
     switch (d.portnum) {
         case meshtastic_PortNum_TEXT_MESSAGE_APP:
+        case meshtastic_PortNum_RANGE_TEST_APP:  // "seq N": shown in the channel like a message
             on_text(p);
             break;
         case meshtastic_PortNum_ROUTING_APP:
@@ -522,6 +739,7 @@ void Mesh::on_packet(const meshtastic_MeshPacket& p)
             }
             break;
         }
+#endif  // MESHCARD_ESP32
         case meshtastic_PortNum_TRACEROUTE_APP: {
             const auto it = trace_ids_.find(d.request_id);
             if (it == trace_ids_.end()) break;
@@ -566,8 +784,70 @@ void Mesh::on_text(const meshtastic_MeshPacket& p)
     } else {
         key = ChatKey{true, m.outgoing ? p.to : p.from};
     }
+#if defined(MESHCARD_ESP32)
+    // The alarm, as meshcard-alertd does it on the Zero: not for our own messages or reactions, and not
+    // for the chat on screen (you are reading it).
+    const bool ring = !m.outgoing && !m.emoji && !(has_active_ && active_ == key);
+#endif
     add_message(key, std::move(m), true);
+#if defined(MESHCARD_ESP32)
+    if (ring) alert_message(key.dm);
+#endif
 }
+
+#if defined(MESHCARD_ESP32)
+// Cardputer ADV: there is no meshzerod to keep the message history, so the
+// screen saves it itself. Kept small (two files of 4 KB, about 100 messages):
+// it is read back in one go at start, and memory is short.
+static HistoryWriter& adv_history()
+{
+    static bool made = false;
+    if (!made) {
+        made = true;
+        make_dirs(history_dir());
+    }
+    static HistoryWriter w(history_path(), 4 * 1024);
+    return w;
+}
+
+// The writes themselves wait here for the firmware thread (mc_ui_background_work), so the
+// screen task never waits on the flash. Bounded: the SD copy still has anything past it.
+namespace {
+struct HistoryJob {
+    bool ack = false;  // an ack record for msg.id, else the whole message
+    StoredMsg msg;
+};
+std::mutex history_mu;
+std::vector<HistoryJob> history_jobs;
+constexpr size_t kMaxHistoryJobs = 16;
+
+void queue_history(HistoryJob job)
+{
+    std::lock_guard<std::mutex> g(history_mu);
+    if (history_jobs.size() < kMaxHistoryJobs) history_jobs.push_back(std::move(job));
+}
+}  // namespace
+
+void history_background_work()
+{
+    std::vector<HistoryJob> jobs;
+    {
+        std::lock_guard<std::mutex> g(history_mu);
+        if (history_jobs.empty()) return;
+        jobs.swap(history_jobs);
+    }
+    for (const HistoryJob& j : jobs) {
+        if (j.ack)
+            adv_history().append_ack(j.msg.id, j.msg.ack, j.msg.ack_error);
+        else
+            adv_history().append(j.msg);
+    }
+}
+
+// The full archive on the SD card (written by the firmware: src/meshcard/LocalUiAPI.cpp).
+// One readable line per message, for opening on a computer.
+extern "C" void mc_sd_append(const char* text, size_t len);
+#endif
 
 void Mesh::add_message(const ChatKey& key, StoredMsg msg, bool live)
 {
@@ -593,10 +873,36 @@ void Mesh::add_message(const ChatKey& key, StoredMsg msg, bool live)
         ev.type = UiEvent::NewMessage;
         ev.chat = key;
         ev.text = short_name(msg.from) + (msg.is_tapback() ? " reacted " : ": ") + msg.text;
+        ev.from    = msg.from;
+        ev.body    = msg.text;
+        ev.tapback = msg.is_tapback();
         events.push_back(std::move(ev));
     }
+#if defined(MESHCARD_ESP32)
+    if (live) {
+        HistoryJob job;
+        job.msg = msg;
+        queue_history(std::move(job));
+        char when[24] = "";
+        const time_t t = static_cast<time_t>(msg.ts);
+        tm parts{};
+        if (localtime_r(&t, &parts)) strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &parts);
+        std::string text = msg.text;
+        for (char& ch : text) {
+            if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
+        }
+        const std::string where = key.dm ? "DM " + short_name(key.id) : "Channel " + std::to_string(key.id);
+        const std::string who   = msg.outgoing ? "me" : short_name(msg.from);
+        const std::string line  = std::string(when) + "  " + where + "  " + who +
+                                 (msg.is_tapback() ? " reacted " : ": ") + text + "\n";
+        mc_sd_append(line.data(), line.size());
+    }
+#endif
     c.msgs.push_back(std::move(msg));
     if (c.msgs.size() > kMaxChatMsgs) c.msgs.erase(c.msgs.begin(), c.msgs.begin() + (c.msgs.size() - kMaxChatMsgs));
+#if defined(MESHCARD_ESP32)
+    trim_all_chats();
+#endif
     ++rev_chats;
 }
 
@@ -628,6 +934,14 @@ void Mesh::on_routing(const meshtastic_MeshPacket& p)
         } else {
             m->ack = AckState::Implicit;
         }
+#if defined(MESHCARD_ESP32)
+        HistoryJob job;
+        job.ack           = true;
+        job.msg.id        = m->id;
+        job.msg.ack       = m->ack;
+        job.msg.ack_error = error;
+        queue_history(std::move(job));
+#endif
         ++rev_chats;
         break;
     }
@@ -941,8 +1255,10 @@ void Mesh::set_favorite(uint32_t num, bool favorite)
         m.remove_favorite_node  = num;
     }
     admin(m);
+#if !defined(MESHCARD_ESP32)  // ADV: the firmware's own list changes, the table follows
     const auto it = nodes.find(num);
     if (it != nodes.end()) it->second.is_favorite = favorite;
+#endif
     ++rev_nodes;
 }
 
@@ -957,8 +1273,10 @@ void Mesh::set_ignored(uint32_t num, bool ignored)
         m.remove_ignored_node   = num;
     }
     admin(m);
+#if !defined(MESHCARD_ESP32)
     const auto it = nodes.find(num);
     if (it != nodes.end()) it->second.is_ignored = ignored;
+#endif
     ++rev_nodes;
 }
 
@@ -968,7 +1286,9 @@ void Mesh::remove_node(uint32_t num)
     m.which_payload_variant   = meshtastic_AdminMessage_remove_by_nodenum_tag;
     m.remove_by_nodenum       = num;
     admin(m);
+#if !defined(MESHCARD_ESP32)
     nodes.erase(num);
+#endif
     ++rev_nodes;
 }
 
@@ -1029,12 +1349,14 @@ void Mesh::nodedb_reset()
     m.which_payload_variant   = meshtastic_AdminMessage_nodedb_reset_tag;
     m.nodedb_reset            = true;
     admin(m);
+#if !defined(MESHCARD_ESP32)
     const meshtastic_NodeInfo* self = me();
     if (self) {
         const meshtastic_NodeInfo keep = *self;
         nodes.clear();
         nodes[my_num] = keep;
     }
+#endif
     ++rev_nodes;
 }
 
@@ -1072,11 +1394,34 @@ std::string delivery_error_text(int error)
 
 // ----------------------------------------------------------------- lookups
 
+#if defined(MESHCARD_ESP32)
+// Read fresh from the firmware's table each time, into one of a few slots: the pointer stays
+// good for the next several lookups (enough for any caller), and nothing grows.
+const meshtastic_NodeInfo* Mesh::node(uint32_t num) const
+{
+    if (num == 0) return nullptr;
+    int slot = 0;
+    for (int i = 0; i < kNodeSlots; ++i) {
+        if (slot_used_[i] && slot_[i].num == num) {
+            slot = i;
+            break;
+        }
+        if (slot_used_[i] < slot_used_[slot]) slot = i;  // else the one used longest ago
+    }
+    if (!mc_node_find(num, &slot_[slot])) {
+        if (slot_[slot].num == num) slot_used_[slot] = 0;
+        return nullptr;
+    }
+    slot_used_[slot] = ++slot_tick_;
+    return &slot_[slot];
+}
+#else
 const meshtastic_NodeInfo* Mesh::node(uint32_t num) const
 {
     const auto it = nodes.find(num);
     return it == nodes.end() ? nullptr : &it->second;
 }
+#endif
 
 std::string Mesh::short_name(uint32_t num) const
 {
@@ -1199,6 +1544,14 @@ void Mesh::set_active_chat(const ChatKey* key)
         mark_read(*key);
         if (key->dm) ensure_key(key->id);
     }
+#if !defined(MESHCARD_ESP32)
+    // Tell meshcard-alertd which chat is on screen: no ring for messages you are watching.
+    // "pid dm id", or empty; the pid lets it ignore a file left by a closed app.
+    if (FILE* f = fopen(alert_open_chat_path().c_str(), "w")) {
+        if (key) fprintf(f, "%d %d %u\n", static_cast<int>(getpid()), key->dm ? 1 : 0, key->id);
+        fclose(f);
+    }
+#endif
 }
 
 void Mesh::mark_read(const ChatKey& key)
@@ -1211,7 +1564,7 @@ void Mesh::mark_read(const ChatKey& key)
     save_read_state();
 }
 
-void Mesh::load_history()
+void Mesh::load_history(const ChatKey* only)
 {
     history_loaded_ = true;
     for (StoredMsg& m : history_load()) {
@@ -1222,14 +1575,57 @@ void Mesh::load_history()
         } else {
             key = ChatKey{true, m.outgoing ? m.to : m.from};
         }
+        if (only && key != *only) continue;
+        const auto arch = archived_.find(key);
+        if (arch != archived_.end() && m.ts <= arch->second) continue;  // archived: in the file, not shown
         // A message still pending from an earlier session will never be confirmed.
         if (m.outgoing && m.ack == AckState::Pending && now_s() > m.ts + 600) m.ack = AckState::None;
         add_message(key, std::move(m), false);
     }
 }
 
+// Archive: only a time per chat is saved; the history file keeps every message.
+void Mesh::save_archived()
+{
+    const std::string dir = user_state_dir();
+    make_dirs(dir);
+    std::ofstream out(dir + "/archived", std::ios::trunc);
+    for (const auto& [key, ts] : archived_) out << (key.dm ? "d " : "c ") << key.id << ' ' << ts << '\n';
+}
+
+void Mesh::archive_chat(const ChatKey& key)
+{
+    archived_[key] = now_s();
+    save_archived();
+    // Emptied, not removed: open pages look their chat up by key (an empty direct chat is
+    // not listed).
+    Chat& c   = chat(key);
+    c.msgs.clear();
+    c.unread  = 0;
+    c.last_ts = 0;
+    ++rev_chats;
+}
+
+void Mesh::unarchive_chat(const ChatKey& key)
+{
+    archived_.erase(key);
+    save_archived();
+    Chat& c   = chat(key);
+    c.msgs.clear();
+    c.unread  = 0;
+    c.last_ts = 0;
+    load_history(&key);  // all of it again, also what came in since
+    ++rev_chats;
+}
+
 void Mesh::load_read_state()
 {
+    {
+        std::ifstream ar(user_state_dir() + "/archived");
+        std::string kind;
+        uint32_t id = 0, ts = 0;
+        while (ar >> kind >> id >> ts) archived_[ChatKey{kind == "d", id}] = ts;
+    }
     std::ifstream in(user_state_dir() + "/read");
     std::string kind;
     uint32_t id = 0;
@@ -1255,3 +1651,11 @@ void Mesh::save_read_state()
 }
 
 }  // namespace mz
+
+#if defined(MESHCARD_ESP32)
+// Called by the firmware thread (src/meshcard/LocalUiAPI.cpp) on every pass.
+void mc_ui_background_work()
+{
+    mz::history_background_work();
+}
+#endif

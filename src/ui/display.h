@@ -9,8 +9,18 @@
 
 namespace mz {
 
-constexpr int kScreenW = 320;
-constexpr int kScreenH = 170;
+#ifndef MC_SCREEN_W
+#define MC_SCREEN_W 320
+#endif
+#ifndef MC_SCREEN_H
+#define MC_SCREEN_H 170
+#endif
+constexpr int kScreenW = MC_SCREEN_W;
+constexpr int kScreenH = MC_SCREEN_H;
+// Small screen = Cardputer ADV (240x135): tighter layout, smaller text.
+constexpr bool kSmall = kScreenW < 300;
+// Scales a Zero pixel size for this screen (4/5 on the ADV, like the text).
+constexpr int S(int v) { return kSmall ? (v * 4 + (v >= 0 ? 2 : -2)) / 5 : v; }
 
 enum class DisplayKind { Auto, Fbdev, Sdl, Headless };
 

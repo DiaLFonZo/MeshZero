@@ -4,13 +4,24 @@
 #include <ctime>
 #include <unordered_map>
 
+#ifdef MESHCARD_ESP32
+#include <esp_heap_caps.h>
+#endif
 #include "common/util.h"
+#include "ui/fonts/fonts.h"
 #include "ui/app.h"
 
 namespace mz {
 namespace {
 
+#ifdef MESHCARD_ESP32
+// The ADV has ~22 KB free and its screen shows ~4 messages: only 6 are built at a time,
+// older / newer ones are built when the arrows reach them. All stay saved. (10 left only
+// ~12 KB free with a chat open, 2026-11-19.)
+constexpr size_t kShownMessages = 6;
+#else
 constexpr size_t kShownMessages = 60;
+#endif
 constexpr int kInputH           = ui::kRowH + 1;
 constexpr int kNameW            = 42;  // fits a four-letter short name
 
@@ -40,7 +51,7 @@ public:
         lv_obj_align(empty_, LV_ALIGN_CENTER, 0, 0);
     }
     int tab() const override { return kTabChats; }
-    std::string hint() const override { return "Enter open   Tab next page   ? help   Hold Esc exit"; }
+    std::string hint() const override { return "Enter open   Del archive   Tab next page   ? help   Hold Esc exit"; }
 
     void refresh() override
     {
@@ -69,8 +80,9 @@ public:
         }
         std::sort(dms.begin(), dms.end(), [](const Chat* a, const Chat* b) { return a->last_ts > b->last_ts; });
 
-        std::vector<ui::ListItem> items;
+        ui::ListItems items;
         keys_.clear();
+        is_chat_.clear();
         const auto add = [&](const Chat* c) {
             ui::ListItem it;
             it.text = mesh.chat_title(c->key);
@@ -78,13 +90,12 @@ public:
                 const StoredMsg& last = c->msgs.back();
                 // In a direct chat the title already says who is talking.
                 const std::string who = last.outgoing ? "me: " : c->key.dm ? "" : mesh.short_name(last.from) + ": ";
-                it.text += "  " + who + (last.is_tapback() ? "reacted " : "") + last.text;
+                it.sub = ui::clean(who + (last.is_tapback() ? "reacted " : "") + last.text, true);
             }
             it.text = ui::clean(it.text, true);
             if (c->unread > 0) {
-                it.right           = std::to_string(c->unread) + " new";
-                it.has_right_color = true;
-                it.right_color     = ui::c_accent();
+                it.right           = std::to_string(c->unread > 99 ? 99 : c->unread);
+                it.right_badge     = true;
                 it.has_color       = true;
                 it.color           = ui::c_text();
             } else {
@@ -94,6 +105,7 @@ public:
             }
             items.push_back(std::move(it));
             keys_.push_back(c->key);
+            is_chat_.push_back(true);
         };
         const auto header = [&](const std::string& text) {
             ui::ListItem it;
@@ -101,6 +113,7 @@ public:
             it.header = true;
             items.push_back(it);
             keys_.push_back(ChatKey{});
+            is_chat_.push_back(false);
         };
         header("Channels");
         for (const Chat* c : channels) add(c);
@@ -113,6 +126,7 @@ public:
             it.header    = false;
             items.push_back(it);
             keys_.push_back(ChatKey{true, 0});
+            is_chat_.push_back(false);
         }
         for (const Chat* c : dms) add(c);
         list_->set_items(items);
@@ -132,6 +146,38 @@ public:
             }
             return true;
         }
+        // Archive one chat: its messages are hidden, not deleted; the same key shows them again.
+        if ((key.k == K::Backspace || key.k == K::Delete) && mesh.ever_ready()) {
+            const size_t i = static_cast<size_t>(list_->selected());
+            if (i >= keys_.size() || i >= is_chat_.size() || !is_chat_[i]) return true;  // a header or a note
+            const ChatKey k     = keys_[i];
+            const std::string t = ui::clean(mesh.chat_title(k), true);
+            Mesh* m             = &mesh;
+            App* a              = &app;
+            if (mesh.chat_archived(k)) {
+                app.push(make_confirm(app, "Archive messages",
+                                      t + "\n\nHide its messages again, or show the archived ones?",
+                                      {"Cancel", "Archive", "Show archived"}, [a, m, k](int c) {
+                                          if (c == 1) {
+                                              m->archive_chat(k);
+                                              a->toast("Messages archived");
+                                          } else if (c == 2) {
+                                              m->unarchive_chat(k);
+                                              a->toast("Archived messages shown");
+                                          }
+                                      }));
+            } else {
+                app.push(make_confirm(app, "Archive messages",
+                                      t + "\n\nHide its messages? Nothing is deleted: Del on this chat shows them again.",
+                                      {"Cancel", "Archive"}, [a, m, k](int c) {
+                                          if (c == 1) {
+                                              m->archive_chat(k);
+                                              a->toast("Messages archived");
+                                          }
+                                      }));
+            }
+            return true;
+        }
         return false;
     }
 
@@ -139,6 +185,7 @@ private:
     std::unique_ptr<ui::ListView> list_;
     lv_obj_t* empty_ = nullptr;
     std::vector<ChatKey> keys_;
+    std::vector<bool> is_chat_;  // per row: a real chat (not a header or a note)
 };
 
 // -------------------------------------------------------------- reactions
@@ -262,7 +309,7 @@ public:
         lv_obj_remove_style_all(msgs_);
         lv_obj_set_size(msgs_, kContentW, kContentH - kInputH - 1);
         lv_obj_set_flex_flow(msgs_, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_style_pad_row(msgs_, 2, 0);
+        lv_obj_set_style_pad_row(msgs_, 4, 0);
         lv_obj_set_style_pad_top(msgs_, 2, 0);
         lv_obj_set_style_pad_bottom(msgs_, 2, 0);
         lv_obj_set_scroll_dir(msgs_, LV_DIR_VER);
@@ -272,7 +319,7 @@ public:
         lv_obj_set_style_width(msgs_, 2, LV_PART_SCROLLBAR);
         lv_obj_remove_flag(msgs_, LV_OBJ_FLAG_CLICKABLE);
 
-        input_ = std::make_unique<ui::TextField>(root, 0, kContentH - kInputH, kContentW, "Message");
+        input_ = std::make_unique<ui::TextField>(root, 3, kContentH - kInputH, kContentW - 6, "Message");
         input_->set_max_bytes(kMaxTextLen);
 
         // Says which message is being replied to; hidden the rest of the time.
@@ -317,10 +364,14 @@ public:
     void refresh() override
     {
         const Chat& c = mesh.chat(key_);
+        // Only a window of messages is built: the newest ones, or older ones once the
+        // arrows go up past the top. The rest stay saved and are built when reached.
+        if (back_ > c.msgs.size()) back_ = c.msgs.size();
+        const size_t end       = c.msgs.size() - back_;
+        const size_t sig_start = end > kShownMessages ? end - kShownMessages : 0;
         // Cheap fingerprint of what is on screen: rebuild only when it changes.
-        uint32_t sig       = static_cast<uint32_t>(c.msgs.size()) * 2654435761u;
-        const size_t start = c.msgs.size() > kShownMessages ? c.msgs.size() - kShownMessages : 0;
-        for (size_t i = start; i < c.msgs.size(); ++i) {
+        uint32_t sig = static_cast<uint32_t>(c.msgs.size()) * 2654435761u + static_cast<uint32_t>(back_) * 977u;
+        for (size_t i = sig_start; i < end; ++i) {
             sig = sig * 31 + c.msgs[i].id + static_cast<uint32_t>(c.msgs[i].ack) * 7;
         }
         sig ^= mesh.node(key_.id) ? 1u : 0u;
@@ -333,6 +384,24 @@ public:
         const bool at_bottom = lv_obj_get_scroll_bottom(msgs_) <= 4;
         lv_obj_clean(msgs_);
         rows_.clear();
+
+        size_t shown = kShownMessages;
+#ifdef MESHCARD_ESP32
+        // Each message on screen costs memory the ADV barely has. Show only what fits
+        // while keeping 12 KB for everything else (radio, Bluetooth, SD card): building
+        // more ran it out of memory and crashed it (2026-11-19). Shared looks brought a
+        // message down from ~1.5 KB; 700 bytes is the safe estimate.
+        {
+            const size_t free_now = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+            const size_t budget   = free_now > 12 * 1024 ? (free_now - 12 * 1024) / 700 : 0;
+            shown                 = std::max<size_t>(3, std::min(shown, budget));
+        }
+#endif
+        const size_t start = end > shown ? end - shown : 0;
+        if (start > 0) {
+            lv_obj_t* l = ui::label(msgs_, LV_SYMBOL_UP " Older messages: Up", ui::c_dim(), ui::font_small());
+            lv_obj_set_style_pad_left(l, 8, 0);
+        }
         if (c.msgs.empty()) {
             lv_obj_t* l = ui::label(msgs_, "No messages yet",
                                     ui::c_dim());
@@ -344,12 +413,12 @@ public:
         // A reaction is drawn under the message it belongs to. One whose message
         // is not on screen, or that could not be sent, gets a line of its own.
         std::unordered_map<uint32_t, size_t> by_id;
-        for (size_t i = start; i < c.msgs.size(); ++i) {
+        for (size_t i = start; i < end; ++i) {
             if (!c.msgs[i].is_tapback() && c.msgs[i].id != 0) by_id[c.msgs[i].id] = i;
         }
         std::unordered_map<size_t, std::vector<const StoredMsg*>> reactions;
         std::vector<bool> attached(c.msgs.size(), false);
-        for (size_t i = start; i < c.msgs.size(); ++i) {
+        for (size_t i = start; i < end; ++i) {
             const StoredMsg& m = c.msgs[i];
             if (!m.is_tapback() || (m.outgoing && m.ack == AckState::Failed)) continue;
             const auto target = by_id.find(m.reply_id);
@@ -357,12 +426,22 @@ public:
             reactions[target->second].push_back(&m);
             attached[i] = true;
         }
-        for (size_t i = start; i < c.msgs.size(); ++i) {
+        for (size_t i = start; i < end; ++i) {
             if (attached[i]) continue;
             const auto r = reactions.find(i);
             add_row(c, c.msgs[i], r == reactions.end() ? nullptr : &r->second);
         }
+        if (back_ > 0) {
+            lv_obj_t* l = ui::label(msgs_, LV_SYMBOL_DOWN " Newer messages: Down", ui::c_dim(), ui::font_small());
+            lv_obj_set_style_pad_left(l, 8, 0);
+        }
+        start_ = start;
+        end_   = end;
         lv_obj_update_layout(msgs_);
+#ifdef MESHCARD_ESP32
+        printf("MeshCard: chat shows %u-%u of %u messages, free %u\n", (unsigned)start, (unsigned)end,
+               (unsigned)c.msgs.size(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+#endif
         if (selecting_) {
             // Stay on the message that was picked, wherever it is now.
             selecting_ = false;
@@ -384,6 +463,7 @@ public:
                 }
                 const std::string text = trim(input_->text());
                 if (!text.empty() && mesh.send_text(key_, text, reply_id_)) {
+                    back_ = 0;  // show the newest, with the one just sent
                     set_reply(0, "");
                     input_->set_text("");
                     refresh();
@@ -404,6 +484,17 @@ public:
             case K::PageDown: {
                 const int step = key.k == K::Up ? -34 : key.k == K::Down ? 34 : key.k == K::PageUp ? -100 : 100;
                 lv_obj_update_layout(msgs_);
+                // At the top or bottom of what is built: build the next older / newer ones,
+                // keeping the message that was at that edge in view.
+                if ((step < 0 && lv_obj_get_scroll_y(msgs_) <= 0 && start_ > 0) ||
+                    (step > 0 && lv_obj_get_scroll_bottom(msgs_) <= 0 && back_ > 0)) {
+                    const Row edge = rows_.empty() ? Row{} : (step < 0 ? rows_.front() : rows_.back());
+                    shift_window(step < 0 ? -1 : 1);
+                    for (const Row& r : rows_) {
+                        if (r.id == edge.id && r.from == edge.from) lv_obj_scroll_to_view(lv_obj_get_parent(r.obj), LV_ANIM_OFF);
+                    }
+                    return true;
+                }
                 int y           = lv_obj_get_scroll_y(msgs_) + step;
                 const int max_y = lv_obj_get_scroll_y(msgs_) + lv_obj_get_scroll_bottom(msgs_);
                 if (y > max_y) y = max_y;
@@ -480,31 +571,55 @@ private:
 
     void select_row(int index)
     {
-        if (selecting_) lv_obj_set_style_bg_opa(rows_[static_cast<size_t>(sel_)].obj, LV_OPA_TRANSP, 0);
+        if (selecting_) lv_obj_set_style_border_width(rows_[static_cast<size_t>(sel_)].obj, 0, 0);
         const Row& r = rows_[static_cast<size_t>(index)];
         selecting_   = true;
         sel_         = index;
         sel_id_      = r.id;
         sel_from_    = r.from;
-        ui::set_bg(r.obj, ui::c_select());
-        lv_obj_scroll_to_view(r.obj, LV_ANIM_OFF);
+        lv_obj_set_style_border_width(r.obj, 2, 0);
+        lv_obj_scroll_to_view(lv_obj_get_parent(r.obj), LV_ANIM_OFF);
     }
 
     void end_selection()
     {
         if (selecting_ && static_cast<size_t>(sel_) < rows_.size()) {
-            lv_obj_set_style_bg_opa(rows_[static_cast<size_t>(sel_)].obj, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(rows_[static_cast<size_t>(sel_)].obj, 0, 0);
         }
         selecting_ = false;
+    }
+
+    // Moves the built window of messages older (-1) or newer (+1) by half its size.
+    // Returns false when there is nothing further that way.
+    bool shift_window(int dir)
+    {
+        const size_t half = std::max<size_t>(1, (end_ - start_) / 2);
+        if (dir < 0) {
+            if (start_ == 0) return false;
+            back_ += std::min(half, start_);
+        } else {
+            if (back_ == 0) return false;
+            back_ -= std::min(half, back_);
+        }
+        refresh();
+        return true;
     }
 
     void move_selection(int delta)
     {
         if (rows_.empty()) return;
-        const int last = static_cast<int>(rows_.size()) - 1;
+        int last = static_cast<int>(rows_.size()) - 1;
         if (!selecting_) {
             select_row(last);
-        } else if (sel_ + delta > last) {
+            return;
+        }
+        // Past the top or bottom of what is built: build the next older / newer ones.
+        // refresh() keeps the picked message picked.
+        if ((sel_ + delta < 0 && shift_window(-1)) || (sel_ + delta > last && shift_window(1))) {
+            last = static_cast<int>(rows_.size()) - 1;
+            if (!selecting_) return;
+        }
+        if (sel_ + delta > last) {
             end_selection();
             lv_obj_scroll_to_y(msgs_, LV_COORD_MAX, LV_ANIM_OFF);
         } else if (sel_ + delta >= 0) {
@@ -665,18 +780,117 @@ private:
         return out;
     }
 
+    // MeshCard: one chat bubble per message. Theirs on the left (dark card,
+    // name in their colour), mine on the right (green tint).
+    // Looks shared by every message on screen. Set once, so each message costs only its
+    // own few objects and text, not a private copy of ~15 style values per object (the
+    // ADV has little memory: with private copies only ~7 messages fitted, 2026-11-19).
+    struct RowStyles {
+        lv_style_t row, bubble, bubble_in, bubble_out, head, text, text_failed, small;
+    };
+    static const RowStyles& row_styles()
+    {
+        static RowStyles s;
+        static bool ready = false;
+        if (ready) return s;
+        ready                = true;
+        const int bubble_max = kContentW * 4 / 5;
+        const int inner_max  = bubble_max - 12;
+        lv_style_init(&s.row);
+        lv_style_set_width(&s.row, kContentW - 4);
+        lv_style_set_height(&s.row, LV_SIZE_CONTENT);
+        lv_style_set_pad_left(&s.row, 3);
+        lv_style_set_pad_right(&s.row, 3);
+        lv_style_set_layout(&s.row, LV_LAYOUT_FLEX);
+        lv_style_set_flex_flow(&s.row, LV_FLEX_FLOW_ROW);
+
+        lv_style_init(&s.bubble);
+        lv_style_set_width(&s.bubble, LV_SIZE_CONTENT);
+        lv_style_set_height(&s.bubble, LV_SIZE_CONTENT);
+        lv_style_set_max_width(&s.bubble, bubble_max);
+        lv_style_set_radius(&s.bubble, 8);
+        lv_style_set_pad_left(&s.bubble, 6);
+        lv_style_set_pad_right(&s.bubble, 6);
+        lv_style_set_pad_top(&s.bubble, 3);
+        lv_style_set_pad_bottom(&s.bubble, 3);
+        lv_style_set_border_color(&s.bubble, ui::c_accent());
+        lv_style_set_border_width(&s.bubble, 0);
+        lv_style_set_bg_opa(&s.bubble, LV_OPA_COVER);
+        lv_style_set_layout(&s.bubble, LV_LAYOUT_FLEX);
+        lv_style_set_flex_flow(&s.bubble, LV_FLEX_FLOW_COLUMN);
+        lv_style_init(&s.bubble_in);
+        lv_style_set_bg_color(&s.bubble_in, ui::c_bar());
+        lv_style_set_flex_cross_place(&s.bubble_in, LV_FLEX_ALIGN_START);
+        lv_style_init(&s.bubble_out);
+        lv_style_set_bg_color(&s.bubble_out, lv_color_hex(0x1f4d33));
+        lv_style_set_flex_cross_place(&s.bubble_out, LV_FLEX_ALIGN_END);
+
+        lv_style_init(&s.head);
+        lv_style_set_text_font(&s.head, mz_font(12, false));
+        lv_style_set_text_color(&s.head, ui::c_dim());
+        lv_style_set_width(&s.head, LV_SIZE_CONTENT);
+        lv_style_set_max_width(&s.head, inner_max);
+
+        lv_style_init(&s.text);
+        lv_style_set_text_font(&s.text, ui::font());
+        lv_style_set_text_color(&s.text, ui::c_text());
+        lv_style_set_width(&s.text, LV_SIZE_CONTENT);
+        lv_style_set_max_width(&s.text, inner_max);
+        lv_style_init(&s.text_failed);
+        lv_style_set_text_color(&s.text_failed, ui::c_dim());
+
+        lv_style_init(&s.small);
+        lv_style_set_text_font(&s.small, ui::font_small());
+        lv_style_set_text_color(&s.small, ui::c_dim());
+        lv_style_set_width(&s.small, LV_SIZE_CONTENT);
+        lv_style_set_max_width(&s.small, inner_max);
+        lv_style_set_height(&s.small, lv_font_get_line_height(ui::font_small()));
+        return s;
+    }
+
+    // A plain object or label carrying only shared looks (no private style copy).
+    static lv_obj_t* styled(lv_obj_t* parent, bool is_label, const lv_style_t* a, const lv_style_t* b = nullptr)
+    {
+        lv_obj_t* o = is_label ? lv_label_create(parent) : lv_obj_create(parent);
+        lv_obj_remove_style_all(o);
+        lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_style(o, const_cast<lv_style_t*>(a), 0);
+        if (b) lv_obj_add_style(o, const_cast<lv_style_t*>(b), 0);
+        return o;
+    }
+
+    // "#" starts a colour in a coloured label: keep it out of names.
+    static std::string no_hash(std::string s)
+    {
+        std::replace(s.begin(), s.end(), '#', ' ');
+        return s;
+    }
+
+    static std::string hex_of(lv_color_t c)
+    {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%02x%02x%02x", c.red, c.green, c.blue);
+        return buf;
+    }
+
     void add_row(const Chat& c, const StoredMsg& m, const std::vector<const StoredMsg*>* taps)
     {
-        lv_obj_t* row = ui::box(msgs_);
-        lv_obj_set_width(row, kContentW - 4);
-        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        const RowStyles& st = row_styles();
 
+        lv_obj_t* row = styled(msgs_, false, &st.row);
+        lv_obj_set_flex_align(row, m.outgoing ? LV_FLEX_ALIGN_END : LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                              LV_FLEX_ALIGN_START);
+
+        lv_obj_t* bubble = styled(row, false, &st.bubble, m.outgoing ? &st.bubble_out : &st.bubble_in);
+
+        // Head line: "NAME  08:02" for theirs, "08:02 (tick)" for mine. One coloured
+        // label instead of a box with two labels.
         const std::string who = m.outgoing ? "me" : mesh.short_name(m.from);
-        lv_obj_t* name = ui::label(row, ui::clean(who, true), m.outgoing ? ui::c_me() : ui::node_color(m.from));
-        lv_obj_set_pos(name, 4, 0);
-        lv_obj_set_width(name, kNameW);
-        lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
-
+        std::string head_text;
+        if (!m.outgoing) {
+            head_text = "#" + hex_of(ui::node_color(m.from)) + " " + no_hash(ui::clean(who, true)) + "#  ";
+        }
         std::string meta = time_str(m.ts);
         lv_color_t meta_color = ui::c_dim();
         if (m.outgoing) {
@@ -699,43 +913,43 @@ private:
                     break;
             }
         }
-        lv_obj_t* meta_l = ui::label(row, meta, meta_color, ui::font_small());
-        lv_obj_align(meta_l, LV_ALIGN_TOP_RIGHT, -3, 2);
-        lv_obj_update_layout(meta_l);
-        const int meta_w = lv_obj_get_width(meta_l) + 6;
+        if (meta_color.red == ui::c_dim().red && meta_color.green == ui::c_dim().green &&
+            meta_color.blue == ui::c_dim().blue) {
+            head_text += meta;
+        } else {
+            head_text += "#" + hex_of(meta_color) + " " + meta + "#";
+        }
+        lv_obj_t* head = styled(bubble, true, &st.head);
+        lv_label_set_recolor(head, true);
+        lv_label_set_long_mode(head, LV_LABEL_LONG_CLIP);
+        lv_label_set_text(head, head_text.c_str());
+
+        // A reply shows what it answers above the text.
+        if (m.reply_id != 0 && !m.is_tapback()) {
+            const std::string quote = quote_of(c, m.reply_id);
+            lv_obj_t* q = styled(bubble, true, &st.small);
+            lv_label_set_long_mode(q, LV_LABEL_LONG_DOT);
+            lv_label_set_text(q, ui::clean(LV_SYMBOL_RIGHT " " + (quote.empty() ? std::string("reply") : quote), true).c_str());
+        }
 
         std::string body = ui::clean(m.text);
         if (m.is_tapback()) body = "reacted " + body;
-        if (m.outgoing && m.ack == AckState::Failed) {
-            body += "\nNot delivered: " + delivery_error_text(m.ack_error);
-        }
-        // A reply shows what it answers on a line of its own above it.
-        int text_y = 0;
-        if (m.reply_id != 0 && !m.is_tapback()) {
-            const std::string quote = quote_of(c, m.reply_id);
-            lv_obj_t* q = ui::label(row, ui::clean(LV_SYMBOL_RIGHT " " + (quote.empty() ? std::string("reply") : quote), true),
-                                    ui::c_dim(), ui::font_small());
-            lv_obj_set_pos(q, kNameW + 8, 1);
-            lv_obj_set_size(q, kContentW - 4 - (kNameW + 8) - meta_w, 12);
-            lv_label_set_long_mode(q, LV_LABEL_LONG_CLIP);
-            text_y = 13;
-        }
-        lv_obj_t* text = ui::label(row, body, m.outgoing && m.ack == AckState::Failed ? ui::c_dim() : ui::c_text());
-        lv_obj_set_pos(text, kNameW + 8, text_y);
-        lv_obj_set_width(text, kContentW - 4 - (kNameW + 8) - meta_w);
+        const bool failed = m.outgoing && m.ack == AckState::Failed;
+        if (failed) body += "\nNot delivered: " + delivery_error_text(m.ack_error);
+        lv_obj_t* text = styled(bubble, true, &st.text, failed ? &st.text_failed : nullptr);
         lv_label_set_long_mode(text, LV_LABEL_LONG_WRAP);
+        lv_label_set_text(text, body.c_str());
 
         if (taps && !taps->empty()) {
-            bool mine             = false;
+            bool mine                 = false;
             const std::string summary = reaction_text(*taps, mine);
-            lv_obj_update_layout(text);
-            lv_obj_t* r = ui::label(row, summary, mine ? ui::c_accent() : ui::c_dim());
-            lv_obj_set_pos(r, kNameW + 8, text_y + lv_obj_get_height(text));
-            lv_obj_set_width(r, kContentW - 4 - (kNameW + 8) - 4);
-            lv_label_set_long_mode(r, LV_LABEL_LONG_CLIP);
+            lv_obj_t* r = styled(bubble, true, &st.small);
+            if (mine) lv_obj_set_style_text_color(r, ui::c_accent(), 0);
+            lv_label_set_long_mode(r, LV_LABEL_LONG_DOT);
+            lv_label_set_text(r, summary.c_str());
         }
         // Reactions themselves cannot be reacted to.
-        if (!m.is_tapback()) rows_.push_back(Row{row, m.id, m.from, who + ": " + m.text});
+        if (!m.is_tapback()) rows_.push_back(Row{bubble, m.id, m.from, who + ": " + m.text});
     }
 
     ChatKey key_;
@@ -746,6 +960,9 @@ private:
     uint32_t sig_ = 0;
     bool built_   = false;
     std::vector<Row> rows_;   // the messages on screen, oldest first
+    size_t back_  = 0;        // newest messages left out below the window (0 = showing the newest)
+    size_t start_ = 0;        // the built window: c.msgs[start_, end_)
+    size_t end_   = 0;
     bool selecting_    = false;  // a message is picked, to react to it
     int sel_           = 0;
     uint32_t sel_id_   = 0;

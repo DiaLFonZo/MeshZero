@@ -2,13 +2,16 @@
 // Radio status tab, packet log, help text and the tab factory.
 #include <ctime>
 
+#if !defined(MESHCARD_ESP32)
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#endif
 
 #include "common/util.h"
 #include "ui/app.h"
+#include "ui/fonts/fonts.h"
 
 namespace mz {
 namespace {
@@ -16,6 +19,9 @@ namespace {
 std::vector<std::string> local_addresses()
 {
     std::vector<std::string> out;
+#if defined(MESHCARD_ESP32)
+    return out;  // Cardputer ADV: no network sharing from the UI
+#else
     ifaddrs* list = nullptr;
     if (getifaddrs(&list) != 0) return out;
     for (ifaddrs* i = list; i; i = i->ifa_next) {
@@ -30,6 +36,7 @@ std::vector<std::string> local_addresses()
     }
     freeifaddrs(list);
     return out;
+#endif
 }
 
 std::string fmt(const char* format, double value)
@@ -39,15 +46,108 @@ std::string fmt(const char* format, double value)
     return buf;
 }
 
+// Frequency the radio uses, in MHz, worked out the way the firmware does
+// (region band, preset bandwidth, channel slot). 0 when unknown.
+double radio_frequency_mhz(const Mesh& mesh)
+{
+    const auto& l = mesh.config.lora;
+    if (l.override_frequency > 0) return l.override_frequency + l.frequency_offset;
+    struct Band {
+        int region;
+        double start, end;
+    };
+    static const Band bands[] = {
+        {meshtastic_Config_LoRaConfig_RegionCode_US, 902.0, 928.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_EU_433, 433.0, 434.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_EU_868, 869.4, 869.65},
+        {meshtastic_Config_LoRaConfig_RegionCode_CN, 470.0, 510.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_JP, 920.5, 923.5},
+        {meshtastic_Config_LoRaConfig_RegionCode_ANZ, 915.0, 928.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_KR, 920.0, 923.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_TW, 920.0, 925.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_RU, 868.7, 869.2},
+        {meshtastic_Config_LoRaConfig_RegionCode_IN, 865.0, 867.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_NZ_865, 864.0, 868.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_TH, 920.0, 925.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_UA_433, 433.0, 434.7},
+        {meshtastic_Config_LoRaConfig_RegionCode_UA_868, 868.0, 868.6},
+        {meshtastic_Config_LoRaConfig_RegionCode_MY_433, 433.0, 435.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_MY_919, 919.0, 924.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_SG_923, 917.0, 925.0},
+        {meshtastic_Config_LoRaConfig_RegionCode_LORA_24, 2400.0, 2483.5},
+    };
+    const Band* band = nullptr;
+    for (const Band& b : bands)
+        if (b.region == l.region) band = &b;
+    if (!band) return 0;
+    double bw_khz = 250;
+    if (!l.use_preset) {
+        bw_khz = l.bandwidth == 31 ? 31.25 : l.bandwidth == 62 ? 62.5 : l.bandwidth == 200 ? 203.125
+                 : l.bandwidth == 400 ? 406.25 : l.bandwidth ? l.bandwidth : 250;
+    } else {
+        switch (l.modem_preset) {
+            case meshtastic_Config_LoRaConfig_ModemPreset_LONG_SLOW:
+            case meshtastic_Config_LoRaConfig_ModemPreset_LONG_MODERATE:
+                bw_khz = 125;
+                break;
+            case meshtastic_Config_LoRaConfig_ModemPreset_VERY_LONG_SLOW:
+                bw_khz = 62.5;
+                break;
+            case meshtastic_Config_LoRaConfig_ModemPreset_SHORT_TURBO:
+            case meshtastic_Config_LoRaConfig_ModemPreset_LONG_TURBO:
+                bw_khz = 500;
+                break;
+            default:
+                bw_khz = 250;
+                break;
+        }
+    }
+    const double bw  = bw_khz / 1000.0;
+    const int slots  = static_cast<int>((band->end - band->start) / bw);
+    if (slots <= 0) return 0;
+    int slot;
+    if (l.channel_num > 0) {
+        slot = (l.channel_num - 1) % slots;
+    } else {
+        // Same hash as the firmware (djb2) of the primary channel name.
+        std::string name = mesh.channel_name(0);
+        if (name.empty() || name == "Primary") name = mesh.preset_name();
+        uint32_t h = 5381;
+        for (const unsigned char c : name) h = ((h << 5) + h) + c;
+        slot = static_cast<int>(h % static_cast<uint32_t>(slots));
+    }
+    return band->start + bw / 2 + slot * bw + l.frequency_offset;
+}
+
 class RadioScreen : public Screen {
 public:
-    explicit RadioScreen(App& a) : Screen(a) { list_ = std::make_unique<ui::ListView>(root, 0, 0, kContentW, kContentH); }
+    // MeshCard: six tiles with the key figures, the details below.
+    explicit RadioScreen(App& a) : Screen(a)
+    {
+        const int w = (kContentW - 4 - 2 * kGap) / 3;
+        for (int i = 0; i < 6; ++i) {
+            Tile& t = tiles_[i];
+            t.box   = ui::box(root);
+            lv_obj_set_pos(t.box, 2 + (i % 3) * (w + kGap), 1 + (i / 3) * (kTileH + kGap));
+            lv_obj_set_size(t.box, w, kTileH);
+            lv_obj_set_style_radius(t.box, 6, 0);
+            ui::set_bg(t.box, ui::c_bar());
+            t.value = ui::label(t.box, "", ui::c_text(), ui::font_bold());
+            lv_obj_set_pos(t.value, 7, 1);
+            lv_obj_set_width(t.value, w - 10);
+            lv_label_set_long_mode(t.value, LV_LABEL_LONG_CLIP);
+            t.name = ui::label(t.box, "", ui::c_dim(), mz_font(12, false));
+            lv_obj_set_pos(t.name, 7, 17);
+        }
+        const int y = 1 + 2 * (kTileH + kGap);
+        list_       = std::make_unique<ui::ListView>(root, 0, y, kContentW, kContentH - y);
+    }
     int tab() const override { return kTabRadio; }
     std::string hint() const override { return "Up/Down scroll   Tab next page"; }
 
     void refresh() override
     {
-        std::vector<ui::ListItem> items;
+        ui::ListItems items;
         log_row_ = -1;
         const auto header = [&](const std::string& text) {
             ui::ListItem it;
@@ -65,6 +165,26 @@ public:
             it.right_color     = warn ? ui::c_warn() : ui::c_text();
             items.push_back(it);
         };
+
+        {
+            const auto& lora = mesh.config.lora;
+            const bool up    = mesh.ever_ready();
+            const double mhz = up ? radio_frequency_mhz(mesh) : 0;
+            const meshtastic_NodeInfo* me = mesh.me();
+            std::string cu = "-", air = "-", batt = "-";
+            if (me && me->has_device_metrics) {
+                const auto& d = me->device_metrics;
+                if (d.has_channel_utilization) cu = fmt("%.1f%%", d.channel_utilization);
+                if (d.has_air_util_tx) air = fmt("%.1f%%", d.air_util_tx);
+                if (d.has_battery_level) batt = d.battery_level > 100 ? "USB" : std::to_string(d.battery_level) + "%";
+            }
+            set_tile(0, up && !mesh.region_unset() ? region_label(lora.region) : "not set", "Region");
+            set_tile(1, mhz > 0 ? fmt("%.3f", mhz) : "-", "MHz");
+            set_tile(2, up ? mesh.preset_name() : "-", "Preset");
+            set_tile(3, cu, "Channel use");
+            set_tile(4, air, "Airtime");
+            set_tile(5, batt, "Battery");
+        }
 
         header("Link");
         switch (mesh.state()) {
@@ -160,7 +280,10 @@ public:
 
     bool on_key(const Key& key) override
     {
-        if (list_->handle_key(key)) return true;
+        if (list_->handle_key(key)) {
+            show_tiles(list_->at_top());
+            return true;
+        }
         if (key.k == K::Enter) {
             if (list_->selected() == log_row_) app.push(make_packet_log(app));
             return true;
@@ -169,6 +292,37 @@ public:
     }
 
 private:
+    static constexpr int kTileH = 33;
+    static constexpr int kGap   = 3;
+    struct Tile {
+        lv_obj_t* box   = nullptr;
+        lv_obj_t* value = nullptr;
+        lv_obj_t* name  = nullptr;
+    };
+    void set_tile(int i, const std::string& value, const char* name)
+    {
+        ui::set_text(tiles_[i].value, ui::clean(value, true));
+        ui::set_text(tiles_[i].name, name);
+    }
+    // The tiles show only while the first row is selected; lower down the
+    // list takes the whole page.
+    void show_tiles(bool on)
+    {
+        if (on == tiles_on_) return;
+        tiles_on_ = on;
+        for (Tile& t : tiles_) {
+            if (on) lv_obj_remove_flag(t.box, LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN);
+        }
+        const int y = on ? kListY : 0;
+        lv_obj_set_pos(list_->obj(), 0, y);
+        list_->set_height(kContentH - y);
+        list_->select(list_->selected());  // keep the picked row in view
+    }
+    static constexpr int kListY = 1 + 2 * (kTileH + kGap);
+    Tile tiles_[6];
+    bool tiles_on_ = true;
+
     static std::string region_label(int region)
     {
         // Names follow the protobuf enum; kept short for the status row.
@@ -200,7 +354,7 @@ public:
         if (!follow_ && built_) return;
         seen_rev_ = mesh.rev_log;
         built_    = true;
-        std::vector<ui::ListItem> items;
+        ui::ListItems items;
         for (auto e = mesh.packet_log.rbegin(); e != mesh.packet_log.rend(); ++e) {
             ui::ListItem it;
             const time_t t = e->ts;
@@ -267,8 +421,8 @@ const char* const kHelp =
     "KEYS\n"
     "Arrows: move (hold Fn only while typing)\n"
     "Enter: open, edit, send\n"
-    "Esc: back. Hold it for 2 seconds to exit\n"
-    "Tab: next page\n"
+    "Esc: back, then Home. On Home, hold it 3 s to exit\n"
+    "Tab or Left/Right: next page\n"
     "Settings: Esc asks to save\n\n"
     "MESSAGES\n"
     "Green tick: delivered. Grey tick: relayed. Cross: failed.\n"
@@ -310,6 +464,8 @@ std::unique_ptr<Screen> make_tab(App& app, int tab)
             return make_radio(app);
         case kTabSetup:
             return make_setup(app);
+        case kTabHome:
+            return make_home(app);
         default:
             return make_chats(app);
     }

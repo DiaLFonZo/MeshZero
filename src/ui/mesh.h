@@ -58,9 +58,41 @@ struct UiEvent {
     ChatKey chat;
     std::string text;
     TraceResult trace;
+    // NewMessage: who sent it, the message alone, and whether it is a reaction.
+    uint32_t from = 0;
+    std::string body;
+    bool tapback = false;
 };
 
 enum class LinkState { Disconnected, Connecting, Syncing, Ready };
+
+#if defined(MESHCARD_ESP32)
+// Cardputer ADV: the node list is the firmware's own (a small fixed table it keeps for the
+// screens, see LocalUiAPI.cpp), read one node at a time. Nothing is copied into a map here.
+// Same use as a std::map: size(), and range-for giving {num, node} pairs.
+class NodeTable {
+public:
+    using value_type = std::pair<uint32_t, meshtastic_NodeInfo>;
+    class iterator {
+    public:
+        iterator(size_t i) : i_(i) {}
+        value_type operator*() const;
+        iterator& operator++()
+        {
+            ++i_;
+            return *this;
+        }
+        bool operator!=(const iterator& o) const { return i_ != o.i_; }
+
+    private:
+        size_t i_;
+    };
+    size_t size() const;
+    bool empty() const { return size() == 0; }
+    iterator begin() const { return iterator(0); }
+    iterator end() const { return iterator(size()); }
+};
+#endif
 
 class Mesh {
 public:
@@ -86,7 +118,11 @@ public:
     meshtastic_MyNodeInfo my_info{};
     meshtastic_DeviceMetadata metadata{};
     bool has_metadata = false;
+#if defined(MESHCARD_ESP32)
+    NodeTable nodes;
+#else
     std::map<uint32_t, meshtastic_NodeInfo> nodes;
+#endif
     meshtastic_Channel channels[kMaxChannels]{};
     meshtastic_LocalConfig config{};
     meshtastic_LocalModuleConfig modules{};
@@ -124,6 +160,11 @@ public:
     bool send_text(const ChatKey& key, const std::string& text, uint32_t reply_id = 0);
     // Reacts to the message with this packet id with an emoji.
     bool send_tapback(const ChatKey& key, uint32_t target_id, const std::string& emoji);
+    // Archive: hides a chat's messages up to now (kept in the history file, nothing deleted);
+    // unarchive shows them again.
+    void archive_chat(const ChatKey& key);
+    void unarchive_chat(const ChatKey& key);
+    bool chat_archived(const ChatKey& key) const { return archived_.count(key) != 0; }
 
     // ---- requests ----------------------------------------------------
     void traceroute(uint32_t dest);
@@ -178,7 +219,7 @@ private:
     void add_message(const ChatKey& key, StoredMsg msg, bool live);
     void log_packet(const meshtastic_MeshPacket& p, bool outgoing);
     void ensure_channel_chats();
-    void load_history();
+    void load_history(const ChatKey* only = nullptr);
     void load_read_state();
     void save_read_state();
     void set_state(LinkState s);
@@ -198,6 +239,8 @@ private:
     uint32_t nonce_           = 0;
     uint32_t id_seq_          = 0;
     bool history_loaded_      = false;
+    std::map<ChatKey, uint32_t> archived_;  // chat -> its messages up to this time are hidden
+    void save_archived();
     std::string radio_note_;
     uint64_t cap_checked_ms_  = 0;
     bool has_active_          = false;
@@ -209,6 +252,17 @@ private:
         int tries   = 0;
     };
     std::map<uint32_t, KeyAsk> key_asks_;  // node -> requests for its public key
+#if defined(MESHCARD_ESP32)
+    void refresh_settings();
+    void trim_all_chats();
+    uint64_t settings_at_ms_ = 0;
+    uint32_t fw_nodes_rev_   = 0;
+    // node() hands out pointers: a few recent lookups stay valid here.
+    static constexpr int kNodeSlots = 4;
+    mutable meshtastic_NodeInfo slot_[kNodeSlots]{};
+    mutable uint32_t slot_used_[kNodeSlots]{};
+    mutable uint32_t slot_tick_ = 0;
+#endif
 };
 
 const char* portnum_name(int portnum);
