@@ -5,15 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/*
- * ASCII and the UI symbols come from LVGL's pre-rendered Montserrat. Anything
- * else (accents, Cyrillic, Greek, ...) is rendered on demand from TrueType
- * files: Montserrat first so text keeps one typeface, then DejaVu Sans for
- * the wider character set, then Noto Emoji (single colour) for emoji.
- */
+/* Font files are looked up at run time; see mz_font() below for the chain. */
 
-static lv_font_t g_main;
-static lv_font_t g_small;
 static bool g_ready = false;
 
 static void* read_file(const char* path, size_t* size)
@@ -62,64 +55,88 @@ typedef struct {
     size_t size;
 } blob_t;
 
-/* Builds base -> Montserrat TTF -> DejaVu TTF -> Noto Emoji TTF, skipping whatever is missing. */
-static void chain(lv_font_t* font, const lv_font_t* base, int size, const void* montserrat, size_t montserrat_size,
-                  const void* dejavu, size_t dejavu_size, blob_t emoji)
-{
-    *font = *base;
-    lv_font_t* tail = font;
-#if LV_USE_TINY_TTF
-    if (montserrat) {
-        lv_font_t* ttf = lv_tiny_ttf_create_data(montserrat, montserrat_size, size);
-        if (ttf) {
-            tail->fallback = ttf;
-            tail           = ttf;
-        }
-    }
-    if (dejavu) {
-        lv_font_t* ttf = lv_tiny_ttf_create_data(dejavu, dejavu_size, size);
-        if (ttf) {
-            tail->fallback = ttf;
-            tail           = ttf;
-        }
-    }
-    if (emoji.data) {
-        lv_font_t* ttf = lv_tiny_ttf_create_data(emoji.data, emoji.size, size + 1);
-        if (ttf) tail->fallback = ttf;
-    }
-#else
-    (void)emoji;
-    (void)size;
-    (void)montserrat;
-    (void)montserrat_size;
-    (void)dejavu;
-    (void)dejavu_size;
-    (void)tail;
-#endif
-}
+/*
+ * MeshCard: every text size is rendered from TrueType on demand, so the UI can
+ * use bigger, bold text and scale per screen (Cardputer Zero 320x170, ADV
+ * 240x135). Chain: Montserrat (Medium or Bold) -> DejaVu Sans (other scripts)
+ * -> Noto Emoji -> LVGL's built-in Montserrat (UI symbols such as arrows).
+ */
+static blob_t g_medium, g_bold, g_dejavu, g_emoji;
 
-static void init(void)
+static void load_files(void)
 {
     if (g_ready) return;
     g_ready = true;
-    size_t montserrat_size = 0, dejavu_size = 0;
     /* The buffers back the fonts for the life of the process. */
-    const void* montserrat = find_font("Montserrat-Medium.ttf", &montserrat_size);
-    const void* dejavu     = find_font("DejaVuSans.ttf", &dejavu_size);
-    blob_t emoji           = {NULL, 0};
-    emoji.data             = find_font("NotoEmoji-Medium.ttf", &emoji.size);
-    chain(&g_main, &lv_font_montserrat_12, 12, montserrat, montserrat_size, dejavu, dejavu_size, emoji);
-    chain(&g_small, &lv_font_montserrat_10, 10, montserrat, montserrat_size, dejavu, dejavu_size, emoji);
+    g_medium.data = find_font("Montserrat-Medium.ttf", &g_medium.size);
+    g_bold.data   = find_font("Montserrat-Bold.ttf", &g_bold.size);
+    if (!g_bold.data) g_bold = g_medium;
+    g_dejavu.data = find_font("DejaVuSans.ttf", &g_dejavu.size);
+    g_emoji.data  = find_font("NotoEmoji-Medium.ttf", &g_emoji.size);
+}
+
+static const lv_font_t* symbols_for(int size)
+{
+    return size >= 14 ? &lv_font_montserrat_14 : size >= 12 ? &lv_font_montserrat_12 : &lv_font_montserrat_10;
+}
+
+static lv_font_t* ttf(blob_t b, int size)
+{
+#if LV_USE_TINY_TTF
+    if (b.data) return lv_tiny_ttf_create_data(b.data, b.size, size);
+#else
+    (void)b;
+    (void)size;
+#endif
+    return NULL;
+}
+
+/* Built fonts, by size (4..64) and weight. */
+static const lv_font_t* g_cache[65][2];
+
+const lv_font_t* mz_font(int size, bool bold)
+{
+    load_files();
+    if (size < 4) size = 4;
+    if (size > 64) size = 64;
+    if (g_cache[size][bold]) return g_cache[size][bold];
+    const lv_font_t* symbols = symbols_for(size);
+    lv_font_t* head = ttf(bold ? g_bold : g_medium, size);
+    if (!head) { /* no TrueType at all: built-in only */
+        g_cache[size][bold] = symbols;
+        return symbols;
+    }
+    lv_font_t* tail = head;
+    lv_font_t* extra[2] = {ttf(g_dejavu, size), ttf(g_emoji, size + 1)};
+    for (int i = 0; i < 2; ++i) {
+        if (extra[i]) {
+            tail->fallback = extra[i];
+            tail           = extra[i];
+        }
+    }
+    tail->fallback      = symbols;
+    g_cache[size][bold] = head;
+    return head;
+}
+
+static int g_base = MZ_FONT_BASE;
+
+void mz_font_set_base(int px)
+{
+    g_base = px;
 }
 
 const lv_font_t* mz_font_main(void)
 {
-    init();
-    return &g_main;
+    return mz_font(g_base, false);
 }
 
 const lv_font_t* mz_font_small(void)
 {
-    init();
-    return &g_small;
+    return mz_font(g_base - 2, false);
+}
+
+const lv_font_t* mz_font_bold(void)
+{
+    return mz_font(g_base, true);
 }

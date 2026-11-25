@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ui/ui.h"
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <unordered_map>
@@ -115,11 +116,11 @@ const char* sounds_name(Sounds mode)
 
 lv_color_t c_bg()
 {
-    return lv_color_hex(0x0b0f14);
+    return lv_color_hex(0x0d1117);
 }
 lv_color_t c_bar()
 {
-    return lv_color_hex(0x18212b);
+    return lv_color_hex(0x1a2029);
 }
 lv_color_t c_text()
 {
@@ -166,6 +167,11 @@ const lv_font_t* font()
 const lv_font_t* font_small()
 {
     return mz_font_small();
+}
+
+const lv_font_t* font_bold()
+{
+    return mz_font_bold();
 }
 
 lv_obj_t* box(lv_obj_t* parent)
@@ -369,6 +375,67 @@ std::string clean(const std::string& text, bool single_line)
 }
 
 // ------------------------------------------------------------------- list
+// MeshCard: one screen object paints the rows in view (see ui.h). Same look as
+// the old label-per-row list: rounded cards, green selected card, headers,
+// prefix cell, right cell or count badge, second line under the selected row.
+
+namespace {
+
+void list_draw_cb(lv_event_t* e)
+{
+    static_cast<ListView*>(lv_event_get_user_data(e))->draw(lv_event_get_layer(e));
+}
+
+// Cuts text to fit a width, ending in "..." (or just cut, without dots).
+std::string fit(const std::string& s, const lv_font_t* f, int w, bool dots)
+{
+    if (w <= 0 || s.empty()) return "";
+    if (lv_text_get_width(s.c_str(), static_cast<uint32_t>(s.size()), f, 0) <= w) return s;
+    const int ew = dots ? lv_text_get_width("...", 3, f, 0) : 0;
+    size_t keep  = 0;
+    for (size_t i = 0; i < s.size();) {
+        const auto c = static_cast<unsigned char>(s[i]);
+        const size_t n = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1;
+        if (i + n > s.size()) break;
+        if (lv_text_get_width(s.c_str(), static_cast<uint32_t>(i + n), f, 0) + ew > w) break;
+        i += n;
+        keep = i;
+    }
+    return s.substr(0, keep) + (dots ? "..." : "");
+}
+
+void text_at(lv_layer_t* layer, const std::string& s, const lv_font_t* f, lv_color_t c, int x, int y, int w)
+{
+    if (s.empty() || w <= 0) return;
+    lv_draw_label_dsc_t d;
+    lv_draw_label_dsc_init(&d);
+    d.font       = f;
+    d.color      = c;
+    d.text       = s.c_str();
+    d.text_local = 1;  // drawn later; keep a copy
+    d.flag       = LV_TEXT_FLAG_EXPAND;
+    lv_area_t a{x, y, x + w - 1, y + lv_font_get_line_height(f) - 1};
+    lv_draw_label(layer, &d, &a);
+}
+
+void box_at(lv_layer_t* layer, lv_color_t c, lv_opa_t opa, int radius, int x1, int y1, int x2, int y2)
+{
+    lv_draw_rect_dsc_t r;
+    lv_draw_rect_dsc_init(&r);
+    r.bg_color     = c;
+    r.bg_opa       = opa;
+    r.radius       = radius;
+    r.border_width = 0;
+    lv_area_t a{x1, y1, x2, y2};
+    lv_draw_rect(layer, &r, &a);
+}
+
+int text_w(const std::string& s, const lv_font_t* f)
+{
+    return s.empty() ? 0 : lv_text_get_width(s.c_str(), static_cast<uint32_t>(s.size()), f, 0);
+}
+
+}  // namespace
 
 ListView::ListView(lv_obj_t* parent, int x, int y, int w, int h) : w_(w), h_(h)
 {
@@ -376,20 +443,9 @@ ListView::ListView(lv_obj_t* parent, int x, int y, int w, int h) : w_(w), h_(h)
     lv_obj_remove_style_all(cont_);
     lv_obj_set_pos(cont_, x, y);
     lv_obj_set_size(cont_, w, h);
-    lv_obj_set_scroll_dir(cont_, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(cont_, LV_SCROLLBAR_MODE_AUTO);
-    lv_obj_set_style_bg_color(cont_, c_dim(), LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_opa(cont_, LV_OPA_70, LV_PART_SCROLLBAR);
-    lv_obj_set_style_width(cont_, 2, LV_PART_SCROLLBAR);
+    lv_obj_remove_flag(cont_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(cont_, LV_OBJ_FLAG_CLICKABLE);
-}
-
-void ListView::set_height(int h)
-{
-    if (h == h_) return;
-    h_ = h;
-    lv_obj_set_height(cont_, h);
-    if (!rows_.empty()) select(selected_);
+    lv_obj_add_event_cb(cont_, list_draw_cb, LV_EVENT_DRAW_MAIN, this);
 }
 
 bool ListView::selectable(int index) const
@@ -397,68 +453,159 @@ bool ListView::selectable(int index) const
     return index >= 0 && index < static_cast<int>(items_.size()) && !items_[static_cast<size_t>(index)].header;
 }
 
-void ListView::rebuild()
+bool ListView::two_line_selected() const
 {
-    lv_obj_clean(cont_);
-    rows_.clear();
-    rows_.resize(items_.size());
+    return active_ && selectable(selected_) && !items_[static_cast<size_t>(selected_)].sub.empty();
+}
+
+// Top of an item inside the list; the selected row may be two lines tall.
+int ListView::y_of(size_t index) const
+{
+    int y = static_cast<int>(index) * kRowH;
+    if (two_line_selected() && static_cast<int>(index) > selected_) y += kRowH - 3;
+    return y;
+}
+
+int ListView::row_h(size_t index) const
+{
+    const bool two = two_line_selected() && static_cast<int>(index) == selected_;
+    return two ? 2 * kRowH - kRowGap - 3 : kRowH - kRowGap;
+}
+
+int ListView::total_h() const
+{
+    return items_.empty() ? 0 : y_of(items_.size()) - kRowGap;
+}
+
+void ListView::redraw()
+{
+    lv_obj_invalidate(cont_);
+}
+
+void ListView::keep_in_view()
+{
+    if (active_ && !items_.empty() && selected_ >= 0 && selected_ < static_cast<int>(items_.size())) {
+        int lo = selected_;
+        if (lo > 0 && items_[static_cast<size_t>(lo - 1)].header) --lo;  // keep its section title in view
+        const int top    = y_of(static_cast<size_t>(lo));
+        const int bottom = y_of(static_cast<size_t>(selected_)) + row_h(static_cast<size_t>(selected_));
+        if (bottom > scroll_ + h_) scroll_ = bottom - h_;
+        if (top < scroll_) scroll_ = top;
+    }
+    const int max_scroll = total_h() - h_;
+    if (scroll_ > max_scroll) scroll_ = max_scroll;
+    if (scroll_ < 0) scroll_ = 0;
+}
+
+void ListView::draw(lv_layer_t* layer)
+{
+    lv_area_t a;
+    lv_obj_get_coords(cont_, &a);
+    const lv_color_t on_sel = c_bg();
+    const int line          = lv_font_get_line_height(font());
     for (size_t i = 0; i < items_.size(); ++i) {
-        Row& r = rows_[i];
-        r.row  = box(cont_);
-        lv_obj_set_pos(r.row, 0, static_cast<int>(i) * kRowH);
-        lv_obj_set_size(r.row, w_, kRowH);
-        int x = 4;
+        const int y0 = y_of(i) - scroll_;
+        const int rh = row_h(i);
+        if (y0 + rh <= 0) continue;
+        if (y0 >= h_) break;
+        const ListItem& it = items_[i];
+        const bool sel     = active_ && static_cast<int>(i) == selected_ && !it.header;
+        const bool two     = sel && !it.sub.empty();
+        const int rx1 = a.x1 + 2, rx2 = a.x1 + w_ - 3;
+        const int ry1 = a.y1 + y0, ry2 = ry1 + rh - 1;
+        if (sel) {
+            box_at(layer, c_accent(), LV_OPA_COVER, 5, rx1, ry1, rx2, ry2);
+        } else if (!it.header) {
+            box_at(layer, c_bar(), LV_OPA_COVER, 5, rx1, ry1, rx2, ry2);
+        }
+        const int ty = ry1 + (kRowH - kRowGap - line) / 2;
+        int x        = 6;
         if (prefix_w_ > 0) {
-            r.prefix = label(r.row, "", c_text());
-            lv_obj_set_pos(r.prefix, x, 1);
-            lv_obj_set_width(r.prefix, prefix_w_);
-            lv_label_set_long_mode(r.prefix, LV_LABEL_LONG_CLIP);
+            const lv_color_t pc = sel ? on_sel : (it.has_prefix_color ? it.prefix_color : c_text());
+            text_at(layer, fit(it.prefix, font_bold(), prefix_w_, false), font_bold(), pc, rx1 + x, ty, prefix_w_);
             x += prefix_w_ + 4;
         }
-        r.text = label(r.row, "", c_text());
-        lv_obj_set_pos(r.text, x, 1);
-        lv_label_set_long_mode(r.text, LV_LABEL_LONG_DOT);
-        lv_obj_set_height(r.text, kRowH - 1);
-        r.right = label(r.row, "", c_dim());
-        lv_obj_align(r.right, LV_ALIGN_TOP_RIGHT, -5, 1);
+        // Right cell (or round count badge): measured first so the text stops short of it.
+        int right_w = 0;
+        if (!it.right.empty()) {
+            const bool badge     = it.right_badge;
+            const lv_font_t* rf  = badge ? font_bold() : font();
+            const int tw         = text_w(it.right, rf);
+            const int cell_w     = tw + (badge ? 12 : 0);
+            const int cx2        = rx2 - 6;
+            const int cx1        = cx2 - cell_w + 1;
+            const int cy         = two ? ry1 + 1 : ty;
+            if (badge) {
+                box_at(layer, sel ? c_bg() : c_accent(), LV_OPA_COVER, 8, cx1, cy, cx2,
+                       cy + lv_font_get_line_height(rf) - 1);
+                text_at(layer, it.right, rf, sel ? c_accent() : c_bg(), cx1 + 6, cy, tw + 1);
+            } else {
+                const lv_color_t rc = sel ? on_sel : (it.has_right_color ? it.right_color : c_dim());
+                text_at(layer, it.right, rf, rc, cx1, cy, tw + 1);
+            }
+            right_w = cell_w + 8;
+        }
+        const int text_w_px      = w_ - x - right_w - 6;
+        const lv_font_t* tf      = it.header || sel ? font_bold() : font();
+        const lv_color_t tc      = sel ? on_sel : it.header ? c_accent() : (it.has_color ? it.color : c_text());
+        const std::string& body  = two || it.sub.empty() ? it.text : it.text + "  " + it.sub;
+        text_at(layer, fit(body, tf, text_w_px, true), tf, tc, rx1 + x, ty, text_w_px);
+        if (two) {
+            text_at(layer, fit(it.sub, font(), text_w_px, true), font(), on_sel, rx1 + x, ry1 + kRowH - kRowGap - 2,
+                    text_w_px);
+        }
     }
-    add_scroll_hints(cont_);
+    // Thin scrollbar and the two "more this way" arrows.
+    const int total = total_h();
+    if (total > h_) {
+        int len = h_ * h_ / total;
+        if (len < 8) len = 8;
+        const int pos = (h_ - len) * scroll_ / (total - h_);
+        box_at(layer, c_dim(), LV_OPA_70, 1, a.x2 - 1, a.y1 + pos, a.x2, a.y1 + pos + len - 1);
+        const lv_font_t* hf = font_small();
+        const int hh        = lv_font_get_line_height(hf);
+        const auto arrow    = [&](const char* sym, int y) {
+            const int sw = text_w(sym, hf) + 6;
+            const int x1 = a.x1 + (w_ - sw) / 2;
+            box_at(layer, c_bar(), LV_OPA_COVER, 6, x1, y, x1 + sw - 1, y + hh - 1);
+            text_at(layer, sym, hf, c_accent(), x1 + 3, y, sw);
+        };
+        if (scroll_ > 2) arrow(LV_SYMBOL_UP, a.y1);
+        if (scroll_ < total - h_ - 2) arrow(LV_SYMBOL_DOWN, a.y1 + h_ - hh);
+    }
 }
 
-void ListView::apply(size_t i)
+void ListView::set_height(int h)
 {
-    const ListItem& it = items_[i];
-    Row& r             = rows_[i];
-    const bool sel     = static_cast<int>(i) == selected_ && !it.header;
-    if (sel) {
-        set_bg(r.row, c_select());
-    } else if (it.header) {
-        set_bg(r.row, c_bar());
-    } else {
-        lv_obj_set_style_bg_opa(r.row, LV_OPA_TRANSP, 0);
-    }
-    if (r.prefix) {
-        set_text(r.prefix, it.prefix);
-        lv_obj_set_style_text_color(r.prefix, it.has_prefix_color ? it.prefix_color : c_text(), 0);
-    }
-    set_text(r.text, it.text);
-    lv_obj_set_style_text_color(r.text, it.header ? c_accent() : (it.has_color ? it.color : c_text()), 0);
-    lv_obj_set_style_text_font(r.text, font(), 0);
-    set_text(r.right, it.right);
-    lv_obj_set_style_text_color(r.right, it.has_right_color ? it.right_color : c_dim(), 0);
-    // Leave room for the right-hand cell so the two never overlap.
-    lv_obj_update_layout(r.right);
-    const int right_w = it.right.empty() ? 0 : lv_obj_get_width(r.right) + 8;
-    const int x       = lv_obj_get_x(r.text);
-    lv_obj_set_width(r.text, w_ - x - right_w - 6);
-    lv_obj_align(r.right, LV_ALIGN_TOP_RIGHT, -5, 1);
+    if (h == h_) return;
+    h_ = h;
+    lv_obj_set_height(cont_, h);
+    keep_in_view();
+    redraw();
 }
 
-void ListView::set_items(const std::vector<ListItem>& items)
+void ListView::set_active(bool on)
 {
-    const bool resize = items.size() != items_.size();
-    items_            = items;
-    if (resize) rebuild();
+    if (active_ == on) return;
+    active_ = on;
+    // Inactive lists show their top; the active one keeps the selection in view.
+    if (!on) scroll_ = 0;
+    keep_in_view();
+    redraw();
+}
+
+// True when no selectable row sits above the selected one.
+bool ListView::at_top() const
+{
+    for (int i = selected_ - 1; i >= 0; --i) {
+        if (selectable(i)) return false;
+    }
+    return true;
+}
+
+void ListView::set_items(const ListItems& items)
+{
+    items_ = items;
     if (selected_ >= static_cast<int>(items_.size())) selected_ = static_cast<int>(items_.size()) - 1;
     if (selected_ < 0) selected_ = 0;
     if (!selectable(selected_)) {
@@ -469,9 +616,8 @@ void ListView::set_items(const std::vector<ListItem>& items)
             }
         }
     }
-    for (size_t i = 0; i < items_.size(); ++i) apply(i);
-    if (resize) select(selected_);
-    update_scroll_hints(cont_);
+    keep_in_view();
+    redraw();
 }
 
 void ListView::select(int index)
@@ -482,15 +628,9 @@ void ListView::select(int index)
     }
     if (index < 0) index = 0;
     if (index >= static_cast<int>(items_.size())) index = static_cast<int>(items_.size()) - 1;
-    const int previous = selected_;
-    selected_          = index;
-    if (previous >= 0 && previous < static_cast<int>(rows_.size())) apply(static_cast<size_t>(previous));
-    apply(static_cast<size_t>(selected_));
-    // Keep a section header visible when its first entry is selected.
-    const int top = selected_ > 0 && items_[static_cast<size_t>(selected_ - 1)].header ? selected_ - 1 : selected_;
-    lv_obj_scroll_to_view(rows_[static_cast<size_t>(top)].row, LV_ANIM_OFF);
-    lv_obj_scroll_to_view(rows_[static_cast<size_t>(selected_)].row, LV_ANIM_OFF);
-    update_scroll_hints(cont_);
+    selected_ = index;
+    keep_in_view();
+    redraw();
 }
 
 void ListView::move(int delta)
@@ -510,8 +650,10 @@ void ListView::move(int delta)
     }
     if (target != selected_) {
         select(target);
-    } else if (step < 0) {
-        lv_obj_scroll_to_y(cont_, 0, LV_ANIM_OFF);
+    } else if (step < 0 && scroll_ != 0) {
+        // Already on the first entry: show what is above it (a header).
+        scroll_ = 0;
+        redraw();
     }
 }
 
@@ -555,9 +697,10 @@ TextField::TextField(lv_obj_t* parent, int x, int y, int w, const std::string& p
     lv_obj_set_style_text_font(ta_, font(), 0);
     lv_obj_set_style_text_color(ta_, c_text(), 0);
     lv_obj_set_style_text_color(ta_, c_dim(), LV_PART_TEXTAREA_PLACEHOLDER);
-    lv_obj_set_style_pad_left(ta_, 4, 0);
-    lv_obj_set_style_pad_right(ta_, 4, 0);
+    lv_obj_set_style_pad_left(ta_, 8, 0);
+    lv_obj_set_style_pad_right(ta_, 8, 0);
     lv_obj_set_style_pad_top(ta_, 1, 0);
+    lv_obj_set_style_radius(ta_, 8, 0);  // MeshCard: rounded field
     set_bg(ta_, c_bar());
     // A steady block cursor: the default one blinks through an animation timer.
     lv_obj_set_style_bg_color(ta_, c_accent(), LV_PART_CURSOR | LV_STATE_FOCUSED);

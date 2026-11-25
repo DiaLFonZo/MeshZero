@@ -15,9 +15,12 @@ if(TARGET meshzero)
     # TrueType fonts for characters outside the built-in ASCII set.
     install(FILES
         "${MESHZERO_FONT_SOURCE_DIR}/Montserrat-Medium.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Montserrat-Bold.ttf"
         "${MESHZERO_FONT_SOURCE_DIR}/DejaVuSans.ttf"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/NotoEmoji-Medium.ttf"
         DESTINATION /usr/share/meshzero/fonts)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Montserrat-OFL.txt"
+        DESTINATION /usr/share/doc/meshzero/font-licenses/Montserrat RENAME MeshCard-OFL.txt)
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/NotoEmoji-OFL.txt"
         DESTINATION /usr/share/doc/meshzero/font-licenses/NotoEmoji RENAME OFL.txt)
     install(DIRECTORY

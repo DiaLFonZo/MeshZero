@@ -105,3 +105,9 @@ north. The model is in the public domain.
 Meshtastic® is a registered trademark of Meshtastic LLC. MeshZero is an
 independent project and is not affiliated with or endorsed by the Meshtastic
 project.
+
+## Redesigned interface
+
+The home dashboard and card layout were contributed by DiaLFonZo from MeshCard,
+with assistance from Claude. Montserrat Bold is distributed under the SIL Open
+Font License 1.1 (see `assets/fonts/Montserrat-OFL.txt`).

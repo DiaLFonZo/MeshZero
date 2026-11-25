@@ -5,6 +5,7 @@
 
 #include "common/util.h"
 #include "ui/app.h"
+#include "ui/fonts/fonts.h"
 
 namespace mz {
 namespace {
@@ -286,19 +287,53 @@ private:
 
 class NodeDetailScreen : public Screen {
 public:
+    // MeshCard layout: summary card, then [Message] [Trace route] buttons,
+    // then the other actions and the details as a list.
     NodeDetailScreen(App& a, uint32_t num) : Screen(a), num_(num)
     {
-        list_ = std::make_unique<ui::ListView>(root, 0, 0, kContentW, kContentH);
+        const bool self = num_ == mesh.my_num;
+        card_ = ui::box(root);
+        lv_obj_set_pos(card_, 2, 1);
+        lv_obj_set_size(card_, kContentW - 4, kCardH);
+        lv_obj_set_style_radius(card_, 6, 0);
+        ui::set_bg(card_, ui::c_bar());
+        name_ = ui::label(card_, "", ui::c_text(), ui::font_bold());
+        lv_obj_set_pos(name_, 8, 1);
+        lv_obj_set_width(name_, kContentW - 20);
+        lv_label_set_long_mode(name_, LV_LABEL_LONG_DOT);
+        facts_ = ui::label(card_, "", ui::c_dim(), mz_font(12, false));
+        lv_obj_set_pos(facts_, 8, 19);
+        lv_obj_set_width(facts_, kContentW - 20);
+        lv_label_set_long_mode(facts_, LV_LABEL_LONG_DOT);
+
+        int y = kCardH + 3;
+        if (!self) {
+            const int bw = (kContentW - 4 - 4) / 2;
+            const char* names[2] = {LV_SYMBOL_ENVELOPE "  Message", LV_SYMBOL_SHUFFLE "  Trace route"};
+            for (int i = 0; i < 2; ++i) {
+                btn_[i] = ui::label(root, names[i], ui::c_text(), ui::font_bold());
+                lv_obj_set_pos(btn_[i], 2 + i * (bw + 4), y);
+                lv_obj_set_size(btn_[i], bw, kBtnH);
+                lv_obj_set_style_radius(btn_[i], 6, 0);
+                lv_obj_set_style_text_align(btn_[i], LV_TEXT_ALIGN_CENTER, 0);
+                lv_obj_set_style_pad_top(btn_[i], 2, 0);
+            }
+            y += kBtnH + 3;
+            focus_buttons_ = true;
+        }
+        list_ = std::make_unique<ui::ListView>(root, 0, y, kContentW, kContentH - y);
         list_->set_prefix_width(16);
+        list_->set_active(!focus_buttons_);
+        paint_buttons();
     }
-    std::string title() const override { return LV_SYMBOL_LEFT " " + mesh.short_name(num_) + "  " + mesh.long_name(num_); }
+    std::string title() const override { return LV_SYMBOL_LEFT " Node"; }
     std::string hint() const override { return "Up/Down move   Enter select   Esc back"; }
     void on_show() override { mesh.want_info(num_, false, true); }
 
     void refresh() override
     {
         const meshtastic_NodeInfo* n = mesh.node(num_);
-        std::vector<ui::ListItem> items;
+        ui::ListItems items;
         actions_.clear();
         const auto action = [&](const char* icon, const std::string& text, std::function<void()> fn) {
             ui::ListItem it;
@@ -336,13 +371,27 @@ public:
         }
         const bool self   = num_ == mesh.my_num;
         const uint32_t id = num_;
-        if (!self) {
-            header("Actions");
-            const bool unmessagable = n->has_user && n->user.has_is_unmessagable && n->user.is_unmessagable;
-            if (!unmessagable) {
-                action(LV_SYMBOL_ENVELOPE, "Send direct message", [this, id]() { app.open_chat(ChatKey{true, id}); });
+        unmessagable_     = n->has_user && n->user.has_is_unmessagable && n->user.is_unmessagable;
+        {
+            ui::set_text(name_, ui::clean(mesh.short_name(num_) + "  " + mesh.long_name(num_), true));
+            std::string f = node_id_str(num_);
+            const auto add = [&f](const std::string& x) { f += "   " + x; };
+            if (self) {
+                add("this device");
+            } else {
+                if (n->has_hops_away) add(n->hops_away == 0 ? "direct" : std::to_string(n->hops_away) + " hops");
+                if (n->snr != 0) add(fmt("%.1f dB", n->snr));
+                if (n->last_heard) add(age_str(n->last_heard, now_s()) + " ago");
             }
-            action(LV_SYMBOL_SHUFFLE, "Trace route", [this, id]() { mesh.traceroute(id); });
+            if (n->has_device_metrics && n->device_metrics.has_battery_level) {
+                const uint32_t b = n->device_metrics.battery_level;
+                add(b > 100 ? std::string(LV_SYMBOL_CHARGE) : std::string(LV_SYMBOL_BATTERY_FULL " ") + std::to_string(b) + "%");
+            }
+            ui::set_text(facts_, ui::clean(f, true));
+        }
+        paint_buttons();
+        if (!self) {
+            header("More");
             action(LV_SYMBOL_GPS, "Request position", [this, id]() { mesh.request_position(id); });
             action(LV_SYMBOL_CHARGE, "Request telemetry", [this, id]() {
                 app.push(make_picker(app, LV_SYMBOL_LEFT " Request telemetry",
@@ -376,7 +425,6 @@ public:
         }
 
         header("Node");
-        info("ID", node_id_str(num_));
         if (n->has_user) {
             info("Hardware", hw_model_name(n->user.hw_model));
             info("Role", role_name(n->user.role));
@@ -500,6 +548,39 @@ public:
 
     bool on_key(const Key& key) override
     {
+        if (focus_buttons_) {
+            switch (key.k) {
+                case K::Left:
+                case K::Right:
+                    btn_sel_ = 1 - btn_sel_;
+                    paint_buttons();
+                    return true;
+                case K::Down:
+                    focus_buttons_ = false;
+                    list_->set_active(true);
+                    paint_buttons();
+                    return true;
+                case K::Enter:
+                    if (btn_sel_ == 0) {
+                        if (unmessagable_) {
+                            app.toast("This node does not take messages", true);
+                        } else {
+                            app.open_chat(ChatKey{true, num_});
+                        }
+                    } else {
+                        mesh.traceroute(num_);
+                    }
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        if (btn_[0] && key.k == K::Up && list_->at_top()) {
+            focus_buttons_ = true;
+            list_->set_active(false);
+            paint_buttons();
+            return true;
+        }
         if (list_->handle_key(key)) return true;
         if (key.k == K::Enter) {
             const size_t i = static_cast<size_t>(list_->selected());
@@ -513,7 +594,29 @@ public:
     }
 
 private:
+    static constexpr int kCardH = 36;
+    static constexpr int kBtnH  = 21;
+
+    // Selected button: green with dark text; the other a dark card.
+    void paint_buttons()
+    {
+        for (int i = 0; i < 2; ++i) {
+            if (!btn_[i]) continue;
+            const bool on  = focus_buttons_ && i == btn_sel_;
+            const bool off = i == 0 && unmessagable_;
+            ui::set_bg(btn_[i], on ? ui::c_accent() : ui::c_bar());
+            lv_obj_set_style_text_color(btn_[i], on ? ui::c_bg() : off ? ui::c_dim() : ui::c_text(), 0);
+        }
+    }
+
     uint32_t num_;
+    lv_obj_t* card_  = nullptr;
+    lv_obj_t* name_  = nullptr;
+    lv_obj_t* facts_ = nullptr;
+    lv_obj_t* btn_[2]{};
+    int btn_sel_        = 0;
+    bool focus_buttons_ = false;
+    bool unmessagable_  = false;
     std::unique_ptr<ui::ListView> list_;
     std::vector<std::function<void()>> actions_;
 };

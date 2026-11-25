@@ -6,14 +6,29 @@
 
 #include "common/util.h"
 #include "ui/sound.h"
+#include "ui/fonts/fonts.h"
 #include "ui/update.h"
+
 
 namespace mz {
 
 constexpr uint64_t kExitHoldMs = 2000;
 
 namespace {
-const char* const kTabNames[kTabCount] = {"Chats", "Nodes", "Map", "Radio", "Setup"};
+const char* const kTabNames[kTabCount] = {"Chats", "Nodes", "Map", "Radio", "Settings", "Home"};
+const char* const kTabIcons[kTabCount] = {LV_SYMBOL_ENVELOPE, LV_SYMBOL_LIST, LV_SYMBOL_GPS,
+                                          LV_SYMBOL_WIFI,     LV_SYMBOL_SETTINGS, LV_SYMBOL_HOME};
+// MeshCard tab row: every tab is an icon; the open one also shows its name.
+constexpr int kShownTabs[]               = {kTabHome, kTabChats, kTabNodes, kTabMap, kTabRadio, kTabSetup};
+constexpr int kShownCount                = 6;
+constexpr int kIconPillW                 = S(30);
+constexpr int kPillGap                   = S(3);
+int shown_index(int tab)
+{
+    for (int i = 0; i < kShownCount; ++i)
+        if (kShownTabs[i] == tab) return i;
+    return -1;
+}
 }
 
 Screen::Screen(App& a) : app(a), mesh(a.mesh)
@@ -41,59 +56,93 @@ void App::start()
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     ui::set_bg(scr, ui::c_bg());
 
+    // Status line: own name and unread on the left, link/GPS/clock on the right.
     bar_ = ui::box(scr);
-    lv_obj_set_size(bar_, kContentW, kBarH);
-    ui::set_bg(bar_, ui::c_bar());
+    lv_obj_set_size(bar_, kContentW, kStatusH);
+    ui::set_bg(bar_, ui::c_bg());
+    who_ = ui::label(bar_, "", ui::c_text(), mz_font(12, true));
+    lv_obj_align(who_, LV_ALIGN_LEFT_MID, S(6), 0);
+    status_ = ui::label(bar_, "", ui::c_dim(), mz_font(12, true));
+    lv_obj_align(status_, LV_ALIGN_RIGHT_MID, S(-6), 0);
 
-    title_ = ui::label(bar_, "", ui::c_text());
-    lv_obj_set_pos(title_, 5, 2);
-    lv_obj_set_width(title_, 210);
-    lv_label_set_long_mode(title_, LV_LABEL_LONG_DOT);
-    lv_obj_set_height(title_, kBarH - 2);
-
+    // Tab row: four pills, or the page title on sub-pages.
+    tabrow_ = ui::box(scr);
+    lv_obj_set_pos(tabrow_, 0, kStatusH);
+    lv_obj_set_size(tabrow_, kContentW, kTabRowH);
     for (int i = 0; i < kTabCount; ++i) {
-        tabs_[i] = ui::label(bar_, kTabNames[i], ui::c_dim());
-        lv_obj_set_style_pad_hor(tabs_[i], 4, 0);
-        lv_obj_set_style_pad_top(tabs_[i], 2, 0);
-        lv_obj_set_height(tabs_[i], kBarH);
+        tabs_[i] = ui::label(tabrow_, kTabIcons[i], ui::c_text(), mz_font(14, true));
+        lv_obj_set_height(tabs_[i], kTabRowH - S(3));
+        lv_obj_set_style_text_align(tabs_[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_pad_top(tabs_[i], 1, 0);
+        lv_obj_set_style_radius(tabs_[i], S(6), 0);
+        lv_label_set_long_mode(tabs_[i], LV_LABEL_LONG_CLIP);
+        if (shown_index(i) < 0) lv_obj_add_flag(tabs_[i], LV_OBJ_FLAG_HIDDEN);
     }
-
-    status_ = ui::label(bar_, "", ui::c_dim(), ui::font_small());
-    lv_obj_align(status_, LV_ALIGN_RIGHT_MID, -4, 0);
+    title_ = ui::label(tabrow_, "", ui::c_text(), mz_font(16, true));
+    lv_obj_set_pos(title_, 2, 1);
+    lv_obj_set_size(title_, kContentW - 4, kTabRowH - S(3));
+    lv_obj_set_style_pad_left(title_, S(6), 0);
+    lv_obj_set_style_radius(title_, S(6), 0);
+    ui::set_bg(title_, ui::c_bar());
+    lv_label_set_long_mode(title_, LV_LABEL_LONG_DOT);
 
     content_ = ui::box(scr);
     lv_obj_set_pos(content_, 0, kBarH);
     lv_obj_set_size(content_, kContentW, kContentH);
 
     hint_ = ui::label(scr, "", ui::c_dim(), ui::font_small());
-    lv_obj_set_pos(hint_, 0, 170 - kHintH);
-    lv_obj_set_size(hint_, kContentW, kHintH);
-    lv_obj_set_style_pad_left(hint_, 5, 0);
-    lv_obj_set_style_pad_top(hint_, 1, 0);
-    lv_label_set_long_mode(hint_, LV_LABEL_LONG_CLIP);
-    ui::set_bg(hint_, ui::c_bar());
+    lv_obj_add_flag(hint_, LV_OBJ_FLAG_HIDDEN);  // MeshCard: keys are under '?'
 
+    // MeshCard: short messages ("Saved"...) are a centre popup like the exit one.
     toast_ = ui::box(scr);
-    lv_obj_set_size(toast_, 300, LV_SIZE_CONTENT);
-    lv_obj_align(toast_, LV_ALIGN_BOTTOM_MID, 0, -2);
-    ui::set_bg(toast_, lv_color_hex(0x24405f));
-    lv_obj_set_style_radius(toast_, 4, 0);
-    lv_obj_set_style_border_width(toast_, 1, 0);
-    lv_obj_set_style_border_color(toast_, ui::c_me(), 0);
-    lv_obj_set_style_pad_all(toast_, 4, 0);
-    toast_label_ = ui::label(toast_, "", ui::c_text());
-    lv_obj_set_width(toast_label_, 290);
+    lv_obj_set_size(toast_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_min_width(toast_, S(160), 0);
+    lv_obj_set_style_radius(toast_, S(10), 0);
+    lv_obj_set_style_border_width(toast_, 2, 0);
+    lv_obj_set_style_border_color(toast_, ui::c_accent(), 0);
+    ui::set_bg(toast_, ui::c_bar());
+    lv_obj_set_style_pad_hor(toast_, S(14), 0);
+    lv_obj_set_style_pad_ver(toast_, S(12), 0);
+    toast_label_ = ui::label(toast_, "", ui::c_text(), mz_font(16, true));
+    lv_obj_set_style_max_width(toast_label_, kContentW - S(60), 0);
+    lv_obj_set_style_text_align(toast_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(toast_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_align(toast_label_, LV_ALIGN_CENTER);
+    lv_obj_center(toast_);
     lv_obj_add_flag(toast_, LV_OBJ_FLAG_HIDDEN);
 
-    notice_ = ui::label(scr, "", ui::c_bg());
-    lv_obj_set_size(notice_, kContentW, kBarH);
+    notice_ = ui::label(scr, "", ui::c_bg(), ui::font_bold());
+    lv_obj_set_size(notice_, kContentW, kStatusH + 2);
     lv_obj_set_style_pad_left(notice_, 5, 0);
-    lv_obj_set_style_pad_top(notice_, 2, 0);
+    lv_obj_set_style_pad_top(notice_, 0, 0);
     lv_label_set_long_mode(notice_, LV_LABEL_LONG_DOT);
     lv_obj_add_flag(notice_, LV_OBJ_FLAG_HIDDEN);
 
-    push(make_tab(*this, kTabChats));
+    // Centre popup shown while Esc is held: "Hold Esc 3 s to exit" + progress bar.
+    exit_pop_ = ui::box(scr);
+    lv_obj_set_size(exit_pop_, S(210), S(58));
+    lv_obj_center(exit_pop_);
+    lv_obj_set_style_radius(exit_pop_, S(10), 0);
+    lv_obj_set_style_border_color(exit_pop_, ui::c_accent(), 0);
+    lv_obj_set_style_border_width(exit_pop_, 2, 0);
+    ui::set_bg(exit_pop_, ui::c_bar());
+    lv_obj_t* exit_text = ui::label(exit_pop_, "Hold Esc 3 s to exit", ui::c_text(), mz_font(16, true));
+    lv_obj_align(exit_text, LV_ALIGN_TOP_MID, 0, S(8));
+    exit_bar_ = lv_bar_create(exit_pop_);
+    lv_obj_remove_style_all(exit_bar_);
+    lv_obj_set_size(exit_bar_, S(170), S(8));
+    lv_obj_align(exit_bar_, LV_ALIGN_BOTTOM_MID, 0, S(-10));
+    lv_obj_set_style_radius(exit_bar_, 4, 0);
+    lv_obj_set_style_radius(exit_bar_, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(exit_bar_, ui::c_bg(), 0);
+    lv_obj_set_style_bg_opa(exit_bar_, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(exit_bar_, ui::c_accent(), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(exit_bar_, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_bar_set_range(exit_bar_, 0, static_cast<int32_t>(kExitHoldMs));
+    lv_obj_add_flag(exit_pop_, LV_OBJ_FLAG_HIDDEN);
+
+    // Centre popup for a new message, same look as the exit popup.
+    push(make_tab(*this, kTabHome));
     apply_pending();
 }
 
@@ -168,7 +217,11 @@ void App::handle_key(const Key& pressed)
     // Leaving the app takes holding Esc, so a stray press does not close it.
     // The wait itself is in tick(); here the hold begins and ends.
     if (pressed.release) {
-        if (pressed.k == K::Esc) esc_held_ms_ = 0;
+        if (pressed.k == K::Esc && esc_held_ms_ != 0) {
+            // Let go early to stay in the app.
+            esc_held_ms_    = 0;
+            lv_obj_add_flag(exit_pop_, LV_OBJ_FLAG_HIDDEN);
+        }
         return;
     }
     if (esc_held_ms_ != 0) {
@@ -215,16 +268,19 @@ void App::handle_key(const Key& pressed)
         if (key.k == K::Esc) {
             if (stack_.size() > 1) {
                 pop();
+            } else if (s->tab() != kTabHome) {
+                // MeshCard: Esc on any other tab goes Home first.
+                if (!key.repeat) switch_tab(kTabHome);
             } else if (!key.repeat) {
                 // Not on a repeat: holding Esc to go back through several
                 // pages must not carry on into leaving the app.
                 esc_held_ms_ = now_ms();
-                notify("Keep holding Esc to exit");
+                lv_bar_set_value(exit_bar_, 0, LV_ANIM_OFF);  // popup appears in tick() after 0.5 s
             }
         } else if (s->tab() >= 0 && !key.ctrl && !key.held) {
-            // Holding Left or Right moves one tab, not through all of them.
-            if (key.k == K::Tab || key.k == K::Right) switch_tab(s->tab() + 1);
-            if (key.k == K::Left) switch_tab(s->tab() - 1);
+            const int at = shown_index(s->tab());
+            if (key.k == K::Tab || key.k == K::Right) switch_tab(kShownTabs[(at + 1) % kShownCount]);
+            if (key.k == K::Left) switch_tab(kShownTabs[(at + kShownCount - 1) % kShownCount]);
             if (key.is_char('?')) push(make_help(*this));
         }
     }
@@ -236,8 +292,10 @@ void App::handle_key(const Key& pressed)
 void App::toast(const std::string& text, bool warn)
 {
     ui::set_text(toast_label_, ui::clean(utf8_truncate(text, 160), true));
-    lv_obj_set_style_border_color(toast_, warn ? ui::c_warn() : ui::c_me(), 0);
+    lv_obj_set_style_border_color(toast_, warn ? ui::c_warn() : ui::c_accent(), 0);
     lv_obj_remove_flag(toast_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_update_layout(toast_);
+    lv_obj_center(toast_);
     lv_obj_move_foreground(toast_);
     toast_until_ = now_ms() + (warn ? 5000 : 3500);
 }
@@ -256,31 +314,36 @@ void App::update_chrome()
     Screen* s = top();
     if (!s) return;
     const int tab = s->tab();
+    const int unread = mesh.total_unread();
     if (tab >= 0) {
         lv_obj_add_flag(title_, LV_OBJ_FLAG_HIDDEN);
-        int x = 1;
-        const int unread = mesh.total_unread();
-        for (int i = 0; i < kTabCount; ++i) {
-            lv_obj_remove_flag(tabs_[i], LV_OBJ_FLAG_HIDDEN);
-            std::string text = kTabNames[i];
-            if (i == kTabChats && unread > 0) text += " " + std::to_string(unread > 99 ? 99 : unread);
-            ui::set_text(tabs_[i], text);
+        // Icon pills, the open tab wide with its name; laid out left to right.
+        const int wide_w = kContentW - 4 - (kShownCount - 1) * (kIconPillW + kPillGap);
+        int x            = 2;
+        for (int at = 0; at < kShownCount; ++at) {
+            const int i       = kShownTabs[at];
             const bool active = i == tab;
-            lv_obj_set_style_text_color(
-                tabs_[i], active ? ui::c_bg() : (i == kTabChats && unread > 0 ? ui::c_accent() : ui::c_dim()), 0);
-            if (active) {
-                ui::set_bg(tabs_[i], ui::c_accent());
-            } else {
-                lv_obj_set_style_bg_opa(tabs_[i], LV_OPA_TRANSP, 0);
-            }
-            lv_obj_set_pos(tabs_[i], x, 0);
-            lv_obj_update_layout(tabs_[i]);
-            x += lv_obj_get_width(tabs_[i]) + 1;
+            lv_obj_remove_flag(tabs_[i], LV_OBJ_FLAG_HIDDEN);
+            const int w = active ? wide_w : kIconPillW;
+            lv_obj_set_pos(tabs_[i], x, 1);
+            lv_obj_set_width(tabs_[i], w);
+            x += w + kPillGap;
+            std::string text = kTabIcons[i];
+            if (active) text += std::string("  ") + kTabNames[i];
+            ui::set_text(tabs_[i], text);
+            lv_obj_set_style_text_color(tabs_[i], active ? ui::c_bg() : ui::c_text(), 0);
+            ui::set_bg(tabs_[i], active ? ui::c_accent() : ui::c_bar());
         }
     } else {
         for (auto* t : tabs_) lv_obj_add_flag(t, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(title_, LV_OBJ_FLAG_HIDDEN);
         ui::set_text(title_, ui::clean(s->title(), true));
+    }
+    {
+        std::string who = mesh.short_name(mesh.my_num);
+        if (unread > 0) who += "   " LV_SYMBOL_ENVELOPE " " + std::to_string(unread > 99 ? 99 : unread);
+        ui::set_text(who_, ui::clean(who, true));
+        lv_obj_set_style_text_color(who_, unread > 0 ? ui::c_accent() : ui::c_text(), 0);
     }
 
     // Right side: link state, satellites, battery, clock.
@@ -331,16 +394,28 @@ void App::update_chrome()
     }
     ui::set_text(status_, status);
     lv_obj_set_style_text_color(status_, color, 0);
-    lv_obj_align(status_, LV_ALIGN_RIGHT_MID, -4, 0);
-
-    ui::set_text(hint_, s->hint());
+    lv_obj_align(status_, LV_ALIGN_RIGHT_MID, S(-6), 0);
 }
 
 void App::tick()
 {
     const uint64_t now = now_ms();
 
-    if (esc_held_ms_ != 0 && now - esc_held_ms_ >= kExitHoldMs) quit();
+    if (esc_held_ms_ != 0) {
+        const uint64_t held = now - esc_held_ms_;
+        // The popup only shows after half a second, so a quick press (screen off) stays clean.
+        if (held >= 500 && lv_obj_has_flag(exit_pop_, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_remove_flag(exit_pop_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(exit_pop_);
+        }
+        // The bar starts empty when the popup appears and fills over the rest of the hold.
+        const uint64_t shown = held < 500 ? 0 : held - 500;
+        const uint64_t span  = kExitHoldMs - 500;
+        lv_bar_set_value(exit_bar_, static_cast<int32_t>((shown > span ? span : shown) * kExitHoldMs / span), LV_ANIM_OFF);
+        if (held >= kExitHoldMs) quit();
+    } else if (!lv_obj_has_flag(exit_pop_, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_add_flag(exit_pop_, LV_OBJ_FLAG_HIDDEN);  // let go early: stay in the app
+    }
 
     // Drain model events as they arrive so toasts feel immediate.
     while (!mesh.events.empty()) {

@@ -8,18 +8,23 @@
 #include <vector>
 
 #include "lvgl.h"
+#include "ui/display.h"
 #include "ui/keys.h"
 #include "ui/mesh.h"
 #include "ui/ui.h"
 
 namespace mz {
 
-constexpr int kBarH     = 18;
-constexpr int kHintH    = 13;
-constexpr int kContentW = 320;
-constexpr int kContentH = 170 - kBarH - kHintH;
+// MeshCard layout (Cardputer Zero 320x170): status line, tab row (or the
+// page title on sub-pages), then the page. No hint bar: '?' shows the keys.
+constexpr int kStatusH  = S(16);
+constexpr int kTabRowH  = S(21);
+constexpr int kBarH     = kStatusH + kTabRowH;
+constexpr int kHintH    = 0;
+constexpr int kContentW = kScreenW;
+constexpr int kContentH = kScreenH - kBarH - kHintH;
 
-enum Tab { kTabChats = 0, kTabNodes, kTabMap, kTabRadio, kTabSetup, kTabCount };
+enum Tab { kTabChats = 0, kTabNodes, kTabMap, kTabRadio, kTabSetup, kTabHome, kTabCount };
 
 class App;
 
@@ -80,6 +85,8 @@ private:
     Screen* top() const { return stack_.empty() ? nullptr : stack_.back().get(); }
 
     lv_obj_t* bar_      = nullptr;
+    lv_obj_t* tabrow_   = nullptr;
+    lv_obj_t* who_      = nullptr;  // own short name + unread count
     lv_obj_t* title_    = nullptr;
     lv_obj_t* tabs_[kTabCount]{};
     lv_obj_t* status_   = nullptr;
@@ -95,6 +102,8 @@ private:
     std::vector<std::function<void()>> pending_;
     Screen* shown_      = nullptr;
     uint64_t last_tick_ = 0;
+    lv_obj_t* exit_pop_   = nullptr;  // MeshCard: centre popup while Esc is held
+    lv_obj_t* exit_bar_   = nullptr;
     uint64_t esc_held_ms_ = 0;  // since when Esc is held on a home page, 0 if it is not
     bool quit_          = false;
     bool region_prompted_ = false;
@@ -109,6 +118,7 @@ private:
 // ---- screen factories (src/ui/screens) ------------------------------------
 std::unique_ptr<Screen> make_tab(App& app, int tab);
 std::unique_ptr<Screen> make_chats(App& app);
+std::unique_ptr<Screen> make_home(App& app);
 std::unique_ptr<Screen> make_nodes(App& app);
 std::unique_ptr<Screen> make_map(App& app);
 // Has the device turned every way to find what its own magnets add to the

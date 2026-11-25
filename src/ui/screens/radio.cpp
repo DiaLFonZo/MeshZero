@@ -272,7 +272,7 @@ const char* const kHelp =
     "KEYS\n"
     "Arrows: move, hold to repeat (hold Fn only while typing)\n"
     "Enter: open, edit, send\n"
-    "Esc: back. Hold it for 2 seconds to exit\n"
+    "Esc: back or Home. Hold Esc on Home to exit\n"
     "Tab: next page\n"
     "?: in Setup, explain the highlighted setting\n"
     "Settings: Esc asks to save\n\n"
@@ -326,6 +326,8 @@ std::unique_ptr<Screen> make_help(App& app)
 std::unique_ptr<Screen> make_tab(App& app, int tab)
 {
     switch (tab) {
+        case kTabHome:
+            return make_home(app);
         case kTabNodes:
             return make_nodes(app);
         case kTabMap:

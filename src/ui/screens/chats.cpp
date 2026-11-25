@@ -100,8 +100,9 @@ public:
             // A muted chat still counts what is new, without calling for attention.
             const bool muted = mesh.muted(c->key);
             if (c->unread > 0) {
-                it.right           = std::to_string(c->unread) + " new";
+                it.right           = std::to_string(c->unread > 99 ? 99 : c->unread);
                 it.has_right_color = !muted;
+                it.right_badge = true;
                 it.right_color     = ui::c_accent();
                 it.has_color       = true;
                 it.color           = muted ? ui::c_dim() : ui::c_text();
