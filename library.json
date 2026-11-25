@@ -1,0 +1,30 @@
+{
+  "name": "meshcard-ui",
+  "version": "0.1.0",
+  "description": "MeshCard screens built into the Meshtastic firmware (Cardputer ADV). Used by the m5stack-cardputer-adv-meshcard env; the Linux build uses CMake instead.",
+  "license": "GPL-3.0-only",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "build": {
+    "srcDir": "src",
+    "includeDir": "src",
+    "srcFilter": [
+      "-<*>",
+      "+<common/util.cpp>",
+      "+<common/history.cpp>",
+      "+<common/proto.cpp>",
+      "+<common/alert.cpp>",
+      "+<ui/*.cpp>",
+      "+<ui/screens/*.cpp>",
+      "+<ui/fonts/fonts.c>",
+      "+<ui/fonts/adv/*.c>",
+      "-<ui/main.cpp>",
+      "-<ui/display.cpp>",
+      "-<ui/keys.cpp>",
+      "-<ui/camera.cpp>",
+      "-<ui/update.cpp>",
+      "-<ui/screens/scan.cpp>"
+    ],
+    "libArchive": false
+  }
+}
