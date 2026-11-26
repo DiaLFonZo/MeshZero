@@ -47,6 +47,10 @@
 
 #define LV_USE_QRCODE 1
 #define LV_USE_CANVAS 1
+#ifdef MESHCARD_ZERO_MAP
+#define LV_USE_LODEPNG 1
+#define LV_USE_TJPGD 1
+#endif
 
 #define LV_USE_LINUX_FBDEV 1
 #define LV_LINUX_FBDEV_BSD 0

@@ -43,3 +43,7 @@ above; the git history of this repository has them in detail.
 - `assets/meshcard-logo.png`, `assets/meshcard-icon-80.png` — MeshCard logo and icon
 
 No upstream file was removed.
+
+The Zero map, compass, tile cache and projection code under `src/ui/zero_map/`
+come from MeshZero commit `b0bddac`. MeshCard integrates them with its existing
+Map tab and adds keys for the map's download and unit settings.

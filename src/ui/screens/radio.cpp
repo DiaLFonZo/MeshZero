@@ -424,6 +424,12 @@ const char* const kHelp =
     "Esc: back, then Home. On Home, hold it 3 s to exit\n"
     "Tab or Left/Right: next page\n"
     "Settings: Esc asks to save\n\n"
+#ifdef MESHCARD_ZERO_MAP
+    "MAP\n"
+    "M cycles Radar, Street and Topo. +/- zooms. 0 fits nodes.\n"
+    "Enter starts or stops panning. H follows the compass on Radar.\n"
+    "D toggles downloads. U switches map units.\n\n"
+#endif
     "MESSAGES\n"
     "Green tick: delivered. Grey tick: relayed. Cross: failed.\n"
     "To message someone, open them in Nodes.\n\n"

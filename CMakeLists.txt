@@ -11,6 +11,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(MESHZERO_SDL "Build the SDL desktop window backend (needs libsdl2-dev)" OFF)
+option(MESHCARD_ZERO_MAP "Build the Zero tile map and compass" ON)
 option(MESHZERO_BUILD_UI "Build the LVGL user interface" ON)
 # Screen size: 320x170 = Cardputer Zero, 240x135 = Cardputer ADV (PC preview).
 set(MC_SCREEN_W 320 CACHE STRING "Screen width in pixels")
@@ -84,7 +85,15 @@ if(MESHZERO_BUILD_UI)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/*.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/screens/*.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/fonts/*.c")
+    if(MESHCARD_ZERO_MAP)
+        list(REMOVE_ITEM MESHZERO_UI_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/screens/map.cpp")
+        file(GLOB MESHCARD_ZERO_MAP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/zero_map/*.cpp")
+        list(APPEND MESHZERO_UI_SOURCES ${MESHCARD_ZERO_MAP_SOURCES})
+    endif()
     add_executable(meshzero ${MESHZERO_UI_SOURCES})
+    if(MESHCARD_ZERO_MAP)
+        target_compile_definitions(lvgl PUBLIC MESHCARD_ZERO_MAP=1)
+    endif()
     target_include_directories(meshzero PRIVATE src)
     find_package(Threads REQUIRED)
     target_link_libraries(meshzero PRIVATE mz_common lvgl m Threads::Threads)
